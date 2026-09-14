@@ -1,0 +1,11 @@
+# Saidas de build (regeneraveis)
+desktop/build/
+desktop/installer/output/
+firmware/.pio/
+
+# IDE / sistema
+.vs/
+.vscode/
+*.user
+Thumbs.db
+desktop.ini

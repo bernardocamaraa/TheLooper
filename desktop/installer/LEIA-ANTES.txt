@@ -1,0 +1,18 @@
+Obrigado por baixar o TheLooper! Algumas informações importantes:
+
+- Este instalador só baixa o programa. Ele NAO instala o driver de audio
+  ASIO4ALL, que e necessario para a placa/interface de audio funcionar
+  corretamente. Baixe e instale o ASIO4ALL separadamente em:
+  https://www.asio4all.org
+
+- Se o programa nao abrir ou fechar sozinho ao iniciar, pode faltar o
+  "Microsoft Visual C++ Redistributable" (x64). Baixe em:
+  https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+Depois de instalar os dois itens acima, o Pedal Looper deve abrir
+normalmente. 
+
+Obrigado novamente por escolher o TheLooper! Esse projeto foi desenvolvido com 
+muito carinho e dedicação
+
+
