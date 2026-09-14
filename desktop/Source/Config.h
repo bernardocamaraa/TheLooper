@@ -36,17 +36,44 @@ constexpr int kNumTracks = 4;
 // limitador ve o pico que realmente sai, e o Recorder grava exatamente isso.
 constexpr bool kMonoOutput = true;
 
-// Duracao maxima de loop suportada. Cada camada de CADA track e pre-alocada
-// nesse tamanho no startup (sem alocacao em background, sem pool
-// compartilhado - troca memoria por robustez).
-//
-// Memoria = kMaxLoopSeconds * kMaxSupportedSampleRate * kNumChannels * 4 bytes
-//           * kMaxLayersPerTrack * kNumTracks
-// Com os valores atuais (60s, 6 camadas, 4 tracks, 48k estereo): ~553 MB.
-// (A versao anterior pedia 300s x 8 camadas = ~3,4 GB, o que fazia o startup
-// tocar ~3,4 GB de paginas e podia falhar em maquinas de 8 GB.)
+// Duracao maxima de loop suportada. Dimensiona os buffers "cheios" (a soma
+// de cada track e o passe que define o loop, que ainda nao sabe o tamanho):
+// kMaxLoopSeconds * kMaxSupportedSampleRate * kNumChannels * 4 bytes = ~23 MB.
 constexpr int kMaxLoopSeconds = 60;
-constexpr int kMaxLayersPerTrack = 6;
+
+// ---------------------------------------------------------------------------
+// CAMADAS INFINITAS (ver LayerStore.h e AudioTrack.h)
+// ---------------------------------------------------------------------------
+// Nao ha limite de camadas por track, e TODAS podem ser desfeitas uma a uma.
+// Cada track toca uma SOMA pre-mixada (o custo do callback nao cresce com o
+// numero de camadas) e guarda cada camada separada so para o desfazer, com o
+// tamanho do loop real. As mais recentes ficam com a thread de audio; as mais
+// antigas vao para a thread do LayerStore, que as despeja em disco quando
+// passam do orcamento de RAM.
+
+// Quantas camadas recentes cada track guarda na thread de audio (capacidade do
+// array fixo), acima de quantas ela manda a mais antiga para o LayerStore, e
+// abaixo de quantas pede de volta as que estao guardadas la.
+constexpr int kRecentLayerSlots = 16;
+constexpr int kRecentLayersKeep = 12;
+constexpr int kRecentRefillBelow = 4;
+
+// Desfazer tira a camada da soma AOS POUCOS, um pedaco por bloco de audio
+// (enquanto isso a leitura subtrai o resto na hora). Quantos desfazer podem
+// estar em andamento ao mesmo tempo por track, e quantas amostras por bloco.
+constexpr int kMaxPendingPeels = 8;
+constexpr int64_t kPeelSamplesPerBlock = int64_t{1} << 17;
+
+// Buffers ja zerados que o LayerStore deixa prontos para a thread de audio
+// (ela nunca aloca nem zera memoria). "Cheios" servem para a soma nova de uma
+// track limpa e para o passe que define o loop; "do loop" tem o tamanho do
+// loop mestre e servem para as camadas de overdub.
+constexpr int kSpareFullBuffers = 6;
+constexpr int kSpareLoopBuffers = 4;
+
+// Acima disto, as camadas guardadas pelo LayerStore mais antigas vao para
+// arquivos temporarios em disco (e voltam quando o desfazer chega nelas).
+constexpr int64_t kDefaultLayerRamBudgetBytes = int64_t{1536} * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // COMPENSACAO DE LATENCIA  (a correcao mais importante deste arquivo)

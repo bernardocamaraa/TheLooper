@@ -47,6 +47,7 @@ option(PEDAL_BUILD_PLUGIN "Compilar tambem a versao VST3 (para o FL Studio)" ON)
 set(kPedalCoreSources
     Source/LooperEngine.cpp
     Source/AudioTrack.cpp
+    Source/LayerStore.cpp
     Source/LoopFile.cpp
     Source/SerialLink.cpp
     Source/PedalLookAndFeel.cpp
@@ -135,6 +136,28 @@ target_link_libraries(PedalLooper PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
+
+# --------------------------------------------------------------------------
+# Testes do motor (sem JUCE, sem device de audio): gravam e desfazem centenas
+# de camadas com audio sintetico e conferem a soma amostra por amostra.
+# Rodar: build/Release/LooperEngineTests.exe
+# --------------------------------------------------------------------------
+option(PEDAL_BUILD_TESTS "Compilar os testes do motor" ON)
+if(PEDAL_BUILD_TESTS)
+    add_executable(LooperEngineTests
+        Tests/LooperEngineTests.cpp
+        Source/LooperEngine.cpp
+        Source/AudioTrack.cpp
+        Source/LayerStore.cpp
+    )
+    target_include_directories(LooperEngineTests PRIVATE
+        Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/../shared
+    )
+    if(MSVC)
+        target_compile_options(LooperEngineTests PRIVATE /utf-8)
+    endif()
+endif()
 
 # SetupAPI (auto-deteccao da porta COM do Mega por VID:PID, ver SerialLink.cpp)
 # ja e vinculada via #pragma comment(lib, "setupapi.lib") no proprio arquivo

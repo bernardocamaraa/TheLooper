@@ -5,14 +5,27 @@
 
 AudioTrack::AudioTrack(int trackIndex) : trackIndex_(trackIndex) {}
 
-void AudioTrack::prepareBuffers() {
-    allocatedFrames_ =
-        static_cast<int64_t>(config::kMaxLoopSeconds * config::kMaxSupportedSampleRate);
-    capacitySamples_ = allocatedFrames_;
-    const size_t samplesTotal = static_cast<size_t>(allocatedFrames_) * config::kNumChannels;
-    for (auto& slot : slots_) {
-        slot.assign(samplesTotal, 0.0f);
+AudioTrack::~AudioTrack() {
+    // So roda no fechamento do app, com o audio ja parado: pode destruir
+    // direto em vez de devolver ao LayerStore.
+    delete mix_;
+    delete capture_;
+    for (int i = 0; i < recentCount_; ++i) {
+        delete recent_[static_cast<size_t>(i)];
     }
+    for (int i = 0; i < peelCount_; ++i) {
+        delete peels_[static_cast<size_t>(i)].buffer;
+    }
+}
+
+void AudioTrack::prepareBuffers(LayerStore* store) {
+    store_ = store;
+    allocatedFrames_ = store->fullFrames();
+    capacitySamples_ = allocatedFrames_;
+    if (mix_ == nullptr) {
+        mix_ = LayerStore::allocate(allocatedFrames_);
+    }
+    mixDirtyFrames_ = 0;
     setSampleRate(config::kPreferredSampleRate);
 }
 
@@ -30,64 +43,91 @@ void AudioTrack::setSampleRate(double sampleRate) {
     levelDecayPerSample_ = std::exp(-1.0f / (0.3f * static_cast<float>(sampleRate)));
 }
 
+// ---------------------------------------------------------------------------
+// FSM
+// ---------------------------------------------------------------------------
+
 bool AudioTrack::beginCapture(int64_t masterLoopLengthSamples) {
-    if (layerCount_ >= config::kMaxLayersPerTrack) {
-        return false; // limite de camadas atingido
-    }
-    if (activeBuffer_ != nullptr) {
-        return false; // ja ha uma captura em andamento (a engine nao deveria chamar aqui)
+    if (capture_ != nullptr || store_ == nullptr || mix_ == nullptr) {
+        return false; // ja ha captura em andamento, ou a track nao foi preparada
     }
 
-    float* buf = slots_[static_cast<size_t>(layerCount_)].data();
+    // O buffer ja chega ZERADO do LayerStore. Zerar e obrigatorio: sem isso,
+    // audio de um passe anterior voltava a tocar nos trechos que a nova
+    // captura ainda nao tinha coberto ("audio fantasma").
     captureDefinesMaster_ = (masterLoopLengthSamples <= 0);
-
-    if (!captureDefinesMaster_) {
-        // Comprimento ja conhecido: zera o trecho que vai ser usado. Sem
-        // isso, lixo de um passe anterior (desfeito ou limpo) volta a tocar
-        // nas posicoes que este passe nao chegar a cobrir.
-        const int64_t clearFrames = std::min(masterLoopLengthSamples, capacitySamples_);
-        std::fill(buf, buf + clearFrames * config::kNumChannels, 0.0f);
+    LayerBuffer* buffer = captureDefinesMaster_ ? store_->takeFull() : store_->takeLoop(masterLoopLengthSamples);
+    if (buffer == nullptr) {
+        captureDefinesMaster_ = false;
+        return false; // nenhum buffer pronto (so acontece se o LayerStore nao acompanhar)
     }
 
+    capture_ = buffer;
     state_ = TrackState::RECORDING;
-    activeBuffer_ = buf;
     return true;
 }
 
 bool AudioTrack::closeCapture() {
-    if (activeBuffer_ == nullptr) {
+    if (capture_ == nullptr) {
         return false; // nao havia captura em andamento
     }
-    ++layerCount_; // comita a camada que estava em slots_[layerCount_ antigo]
-    activeBuffer_ = nullptr;
+    pushRecent(capture_);
+    capture_ = nullptr;
     captureDefinesMaster_ = false;
     state_ = TrackState::PLAYING;
+    publishCount();
     return true;
 }
 
 bool AudioTrack::cancelCapture() {
-    if (activeBuffer_ == nullptr) {
+    if (capture_ == nullptr) {
         return false;
     }
-    activeBuffer_ = nullptr;
+    LayerBuffer* cancelled = capture_;
+    capture_ = nullptr;
     captureDefinesMaster_ = false;
-    state_ = (layerCount_ > 0) ? TrackState::PLAYING : TrackState::EMPTY;
+
+    if (effectiveLayers() <= 0) {
+        // A track so tinha este passe: silencio exato, sem subtrair nada.
+        store_->release(cancelled);
+        clearTrack();
+        return true;
+    }
+
+    // O passe ja estava na soma (e tocando): tira de la aos poucos.
+    startPeel(cancelled);
+    state_ = TrackState::PLAYING;
+    publishCount();
     return true;
 }
 
 bool AudioTrack::peelLastLayer() {
-    if (layerCount_ == 0) {
+    const int layers = effectiveLayers();
+    if (layers <= 0) {
         return false;
     }
-    --layerCount_;
-    if (layerCount_ == 0) {
-        state_ = TrackState::EMPTY;
-        level_.store(0.0f, std::memory_order_relaxed);
-    } else if (state_ == TrackState::EMPTY) {
+    if (layers == 1) {
+        // Ultima camada: troca a soma por uma zerada em vez de subtrair. Fica
+        // silencio exato, e e o unico jeito de desfazer a camada base de uma
+        // sessao aberta de arquivo, que nao tem buffer proprio.
+        clearTrack();
+        return true;
+    }
+
+    if (recentCount_ > 0) {
+        --recentCount_;
+        LayerBuffer* layer = recent_[static_cast<size_t>(recentCount_)];
+        recent_[static_cast<size_t>(recentCount_)] = nullptr;
+        startPeel(layer);
+    } else {
+        // A camada a tirar esta guardada no LayerStore (talvez em disco).
+        // Fica pendente: service() pede de volta e onRestored() aplica.
+        ++pendingUndos_;
+    }
+    if (state_ == TrackState::EMPTY) {
         state_ = TrackState::PLAYING;
     }
-    // O slot removido NAO precisa ser zerado aqui: beginCapture zera o trecho
-    // antes de reusa-lo, e mixFrameInto so le camadas < layerCount_.
+    publishCount();
     return true;
 }
 
@@ -98,46 +138,204 @@ void AudioTrack::setMuted(bool muted) {
     state_ = muted ? TrackState::MUTED : TrackState::PLAYING;
 }
 
-void AudioTrack::readMix(float* dest, int64_t frames) const {
-    const size_t total = static_cast<size_t>(frames) * config::kNumChannels;
-    std::fill(dest, dest + total, 0.0f);
+void AudioTrack::clearTrack() {
+    if (store_ != nullptr) {
+        store_->release(capture_);
+        for (int i = 0; i < recentCount_; ++i) {
+            store_->release(recent_[static_cast<size_t>(i)]);
+        }
+        for (int i = 0; i < peelCount_; ++i) {
+            store_->release(peels_[static_cast<size_t>(i)].buffer);
+        }
+        store_->clearDeep(trackIndex_);
+    }
+    capture_ = nullptr;
+    recent_.fill(nullptr);
+    recentCount_ = 0;
+    peels_.fill(Peel{});
+    peelCount_ = 0;
+    deepCount_ = 0;
+    pendingUndos_ = 0;
+    refillOutstanding_ = false;
+    refillExpected_ = 0;
+    ++generation_;
+    baseOnly_ = false;
+    captureDefinesMaster_ = false;
 
-    const int64_t usable = std::min(frames, capacitySamples_);
-    const size_t usableTotal = static_cast<size_t>(usable) * config::kNumChannels;
-    for (int layer = 0; layer < layerCount_; ++layer) {
-        const float* src = slots_[static_cast<size_t>(layer)].data();
-        for (size_t i = 0; i < usableTotal; ++i) {
-            dest[i] += src[i];
+    resetMix();
+
+    state_ = TrackState::EMPTY;
+    level_.store(0.0f, std::memory_order_relaxed);
+    publishCount();
+}
+
+// Troca a soma por uma zerada que ja estava pronta; a velha volta para o
+// LayerStore zerar. So zera aqui mesmo se nao houver nenhuma pronta.
+void AudioTrack::resetMix() {
+    if (mix_ == nullptr) {
+        return;
+    }
+    if (mixDirtyFrames_ == 0) {
+        return; // nunca recebeu audio: ja esta zerada
+    }
+    LayerBuffer* fresh = (store_ != nullptr) ? store_->takeFull() : nullptr;
+    if (fresh != nullptr) {
+        store_->release(mix_);
+        mix_ = fresh;
+    } else {
+        std::fill(mix_->data(), mix_->data() + mixDirtyFrames_ * config::kNumChannels, 0.0f);
+    }
+    mixDirtyFrames_ = 0;
+}
+
+void AudioTrack::pushRecent(LayerBuffer* layer) {
+    if (recentCount_ == config::kRecentLayerSlots) {
+        // Nao deveria acontecer (service() manda as antigas para o LayerStore
+        // bem antes). Se a fila dele estiver cheia, a mais antiga das recentes
+        // perde o buffer: o som dela continua na soma e ela so deixa de poder
+        // ser desfeita sozinha - vira parte da base.
+        LayerBuffer* oldest = recent_[0];
+        if (store_ != nullptr && store_->archive(trackIndex_, generation_, oldest)) {
+            ++deepCount_;
+        } else {
+            if (store_ != nullptr) {
+                store_->release(oldest);
+            }
+            baseOnly_ = true;
+        }
+        std::move(recent_.begin() + 1, recent_.end(), recent_.begin());
+        --recentCount_;
+    }
+    recent_[static_cast<size_t>(recentCount_)] = layer;
+    ++recentCount_;
+}
+
+void AudioTrack::startPeel(LayerBuffer* layer) {
+    if (layer == nullptr) {
+        return;
+    }
+    if (peelCount_ == config::kMaxPendingPeels) {
+        finishPeel(0); // muitos desfazer seguidos: termina o mais antigo agora
+    }
+    Peel peel;
+    peel.buffer = layer;
+    peel.done = 0;
+    const int64_t span = (loopLength_ > 0) ? loopLength_ : mixDirtyFrames_;
+    peel.frames = std::min({layer->frames, span, capacitySamples_});
+    peels_[static_cast<size_t>(peelCount_)] = peel;
+    ++peelCount_;
+}
+
+void AudioTrack::finishPeel(int index) {
+    Peel& peel = peels_[static_cast<size_t>(index)];
+    const int64_t total = peel.frames * config::kNumChannels;
+    float* mix = mix_->data();
+    const float* layer = peel.buffer->data();
+    for (int64_t i = peel.done; i < total; ++i) {
+        mix[i] -= layer[i];
+    }
+    store_->release(peel.buffer);
+    peels_[static_cast<size_t>(index)] = peels_[static_cast<size_t>(peelCount_ - 1)];
+    peels_[static_cast<size_t>(peelCount_ - 1)] = Peel{};
+    --peelCount_;
+}
+
+void AudioTrack::publishCount() {
+    publishedLayers_.store(std::max(0, effectiveLayers()), std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Manutencao por bloco
+// ---------------------------------------------------------------------------
+
+void AudioTrack::service() {
+    if (store_ == nullptr || mix_ == nullptr) {
+        return;
+    }
+
+    // 1. Desfazer em andamento: subtrai da soma mais um pedaco de cada um.
+    int64_t budget = config::kPeelSamplesPerBlock;
+    for (int i = 0; i < peelCount_ && budget > 0;) {
+        Peel& peel = peels_[static_cast<size_t>(i)];
+        const int64_t total = peel.frames * config::kNumChannels;
+        const int64_t count = std::min(total - peel.done, budget);
+        float* mix = mix_->data() + peel.done;
+        const float* layer = peel.buffer->data() + peel.done;
+        for (int64_t k = 0; k < count; ++k) {
+            mix[k] -= layer[k];
+        }
+        peel.done += count;
+        budget -= count;
+        if (peel.done >= total) {
+            store_->release(peel.buffer);
+            peels_[static_cast<size_t>(i)] = peels_[static_cast<size_t>(peelCount_ - 1)];
+            peels_[static_cast<size_t>(peelCount_ - 1)] = Peel{};
+            --peelCount_;
+        } else {
+            ++i;
+        }
+    }
+
+    // 2. Recentes demais: a mais antiga vai para o LayerStore.
+    while (recentCount_ > config::kRecentLayersKeep) {
+        if (!store_->archive(trackIndex_, generation_, recent_[0])) {
+            break; // fila cheia: tenta no proximo bloco
+        }
+        std::move(recent_.begin() + 1, recent_.begin() + recentCount_, recent_.begin());
+        --recentCount_;
+        recent_[static_cast<size_t>(recentCount_)] = nullptr;
+        ++deepCount_;
+    }
+
+    // 3. Poucas recentes (ou desfazer esperando): pede as guardadas de volta
+    // antes que o desfazer precise delas.
+    if (!refillOutstanding_ && deepCount_ > 0 &&
+        (recentCount_ < config::kRecentRefillBelow || pendingUndos_ > 0)) {
+        const int want = std::min(deepCount_, std::max(pendingUndos_, config::kRecentLayersKeep - recentCount_));
+        if (want > 0 && store_->requestRefill(trackIndex_, generation_, want)) {
+            refillOutstanding_ = true;
+            refillExpected_ = want;
         }
     }
 }
 
-void AudioTrack::loadMix(const float* source, int64_t frames, bool muted) {
-    clearTrack();
-
-    const int64_t usable = std::min(frames, capacitySamples_);
-    if (usable <= 0 || slots_[0].empty()) {
+void AudioTrack::onRestored(const LayerRestore& restore) {
+    if (restore.generation != generation_ || store_ == nullptr) {
+        // Pedida antes de uma limpeza: nao pertence mais a esta track.
+        if (store_ != nullptr) {
+            store_->release(restore.buffer);
+        }
         return;
     }
 
-    // Zera o slot INTEIRO antes de copiar: o que sobra depois do trecho
-    // carregado seria audio da sessao anterior, e ele voltaria a tocar se o
-    // loop desta musica for mais curto que o da anterior - o mesmo "audio
-    // fantasma" que beginCapture evita.
-    std::fill(slots_[0].begin(), slots_[0].end(), 0.0f);
-    std::copy(source, source + static_cast<size_t>(usable) * config::kNumChannels, slots_[0].begin());
+    --deepCount_;
+    if (--refillExpected_ <= 0) {
+        refillOutstanding_ = false;
+        refillExpected_ = 0;
+    }
 
-    layerCount_ = 1;
-    state_ = muted ? TrackState::MUTED : TrackState::PLAYING;
+    if (pendingUndos_ > 0) {
+        // As camadas voltam da mais nova para a mais antiga, e o desfazer
+        // pendente era justamente para as mais novas das guardadas.
+        --pendingUndos_;
+        startPeel(restore.buffer);
+    } else if (recentCount_ < config::kRecentLayerSlots) {
+        // Mais antiga que todas as recentes: entra no fundo do array.
+        std::move_backward(recent_.begin(), recent_.begin() + recentCount_, recent_.begin() + recentCount_ + 1);
+        recent_[0] = restore.buffer;
+        ++recentCount_;
+    } else if (store_->archive(trackIndex_, generation_, restore.buffer)) {
+        ++deepCount_; // sem vaga: volta a ser a mais nova das guardadas
+    } else {
+        store_->release(restore.buffer);
+        baseOnly_ = true; // mesma saida de pushRecent: vira parte da base
+    }
+    publishCount();
 }
 
-void AudioTrack::clearTrack() {
-    layerCount_ = 0;
-    activeBuffer_ = nullptr;
-    captureDefinesMaster_ = false;
-    state_ = TrackState::EMPTY;
-    level_.store(0.0f, std::memory_order_relaxed);
-}
+// ---------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------
 
 void AudioTrack::routeInput(const float* in, float* out) const {
     const uint32_t mask = inputMask_.load(std::memory_order_relaxed);
@@ -152,13 +350,7 @@ void AudioTrack::routeInput(const float* in, float* out) const {
     // QUALQUER selecao de entradas - uma so ou todas - e somada em MONO e vai
     // para os dois canais, como um canal mono de mesa com o pan no centro. Se
     // mantivesse o canal original, uma track so de violao sairia so de um
-    // lado.
-    //
-    // "Todas as entradas" ja foi um caso a parte que preservava o par estereo,
-    // e era o unico lugar do app que produzia canais diferentes: uma track
-    // "Voz + Violao" saia com a voz num lado e o violao no outro. Numa saida
-    // mono (ver config::kMonoOutput) isso nao faz sentido - e ligado num canal
-    // so da mesa, um dos dois sumiria.
+    // lado. (A saida do app e mono - ver config::kMonoOutput.)
     float mono = 0.0f;
     int count = 0;
     for (int ch = 0; ch < config::kNumChannels; ++ch) {
@@ -190,10 +382,10 @@ void AudioTrack::meterInputFrame(const float* inputFrame) {
 }
 
 void AudioTrack::writeFrame(const float* inputFrame, int64_t position) {
-    if (activeBuffer_ == nullptr || state_ != TrackState::RECORDING) {
+    if (capture_ == nullptr || state_ != TrackState::RECORDING) {
         return;
     }
-    if (position < 0 || position >= capacitySamples_) {
+    if (position < 0 || position >= capacitySamples_ || position >= capture_->frames) {
         return; // limite de seguranca (kMaxLoopSeconds)
     }
 
@@ -203,86 +395,92 @@ void AudioTrack::writeFrame(const float* inputFrame, int64_t position) {
     float routed[config::kNumChannels];
     routeInput(inputFrame, routed);
 
-    float* dest = &activeBuffer_[static_cast<size_t>(position) * config::kNumChannels];
+    // Na camada (para o desfazer) e na soma (para tocar). Acumular preserva o
+    // que foi tocado se o passe der mais de uma volta no loop; no passe que
+    // define o loop cada posicao e visitada uma vez so, sobre buffer zerado.
+    const size_t offset = static_cast<size_t>(position) * config::kNumChannels;
+    float* layer = capture_->data() + offset;
+    float* mix = mix_->data() + offset;
     float peak = 0.0f;
-    if (captureDefinesMaster_) {
-        // Passe que define o loop mestre: cada posicao e visitada exatamente
-        // uma vez, em ordem - sobrescrever e correto (e dispensa o memset).
-        for (int ch = 0; ch < config::kNumChannels; ++ch) {
-            dest[ch] = routed[ch];
-            peak = std::max(peak, std::fabs(routed[ch]));
-        }
-    } else {
-        // Camada normal: o slot ja foi zerado em beginCapture, entao acumular
-        // preserva o que foi tocado se o passe der mais de uma volta no loop.
-        for (int ch = 0; ch < config::kNumChannels; ++ch) {
-            dest[ch] += routed[ch];
-            peak = std::max(peak, std::fabs(routed[ch]));
-        }
+    for (int ch = 0; ch < config::kNumChannels; ++ch) {
+        layer[ch] += routed[ch];
+        mix[ch] += routed[ch];
+        peak = std::max(peak, std::fabs(routed[ch]));
     }
+    mixDirtyFrames_ = std::max(mixDirtyFrames_, position + 1);
     updateLevel(peak);
 }
 
-void AudioTrack::mixFrameInto(float* outputFrame, int64_t position, float* soloOut) {
+void AudioTrack::mixFrameInto(float* outputFrame, int64_t position, float* soloOut, float meterScale) {
     if (soloOut != nullptr) {
         for (int ch = 0; ch < config::kNumChannels; ++ch) {
             soloOut[ch] = 0.0f;
         }
     }
 
-    // A camada EM ANDAMENTO tambem toca, nao so as ja commitadas. Ela vive em
-    // slots_[layerCount_], entao basta somar uma camada a mais.
+    // A soma ja inclui o passe EM ANDAMENTO: e isso que faz o overdub ser
+    // ouvido ja na volta seguinte do loop. Nao ha realimentacao: o ponteiro de
+    // escrita fica latencySamples ATRAS do de leitura, entao ler a posicao
+    // atual devolve o que foi gravado na volta anterior - nunca o que esta
+    // sendo escrito neste instante.
     //
-    // Isso e o que faz o overdub ser ouvido ja na volta seguinte do loop, em
-    // vez de so aparecer quando o passe e fechado (era o comportamento
-    // anterior, e soava como se a gravacao nao estivesse acontecendo).
-    // Nao ha realimentacao: o ponteiro de escrita fica latencySamples ATRAS
-    // do de leitura, entao ler a posicao atual devolve o que foi gravado na
-    // volta anterior - nunca o que esta sendo escrito neste instante.
-    //
-    // O passe que DEFINE o loop mestre e a excecao: o slot dele nao e zerado
-    // (ver beginCapture) e o comprimento ainda nem existe, entao toca-lo
-    // devolveria lixo. Alem disso o loop ainda nao deu a primeira volta - nao
-    // ha o que repetir.
-    const bool playActiveLayer = (activeBuffer_ != nullptr && !captureDefinesMaster_);
-    const int layersToMix = layerCount_ + (playActiveLayer ? 1 : 0);
+    // O passe que DEFINE o loop mestre e a excecao: o loop ainda nao deu a
+    // primeira volta (nao ha o que repetir), e ler a mesma posicao que acabou
+    // de ser escrita devolveria a propria entrada, como um monitoramento
+    // duplicado.
+    const bool hasContent =
+        (committedLayers() > 0) || (capture_ != nullptr && !captureDefinesMaster_);
 
     // Quem alimenta o medidor quando meterInput_ esta ligado e
     // meterInputFrame(); gravando, e writeFrame(). Nos dois casos a
     // reproducao nao pode sobrescrever o nivel.
     const bool meterFromPlayback = !meterInput_ && (state_ != TrackState::RECORDING);
 
-    if (state_ == TrackState::MUTED || layersToMix == 0 || position < 0 ||
-        position >= capacitySamples_) {
+    if (!hasContent || mix_ == nullptr || position < 0 || position >= capacitySamples_) {
         if (meterFromPlayback) {
             updateLevel(0.0f); // deixa o VU cair em vez de congelar
         }
         return;
     }
 
-    float trackFrame[config::kNumChannels] = {};
     const size_t offset = static_cast<size_t>(position) * config::kNumChannels;
-    for (int layer = 0; layer < layersToMix; ++layer) {
-        const float* sample = &slots_[static_cast<size_t>(layer)][offset];
+    float trackFrame[config::kNumChannels];
+    for (int ch = 0; ch < config::kNumChannels; ++ch) {
+        trackFrame[ch] = mix_->data()[offset + static_cast<size_t>(ch)];
+    }
+    // Desfazer em andamento: o trecho que service() ainda nao subtraiu da
+    // soma e subtraido aqui, na leitura - a camada some do som na hora.
+    for (int p = 0; p < peelCount_; ++p) {
+        const Peel& peel = peels_[static_cast<size_t>(p)];
+        if (position >= peel.frames) {
+            continue;
+        }
+        const float* layer = peel.buffer->data() + offset;
         for (int ch = 0; ch < config::kNumChannels; ++ch) {
-            trackFrame[ch] += sample[ch];
+            if (static_cast<int64_t>(offset) + ch >= peel.done) {
+                trackFrame[ch] -= layer[ch];
+            }
         }
     }
 
     // Fader da mesa aplicado na reproducao - o audio gravado fica intacto.
     const float userGain = gain_.load(std::memory_order_relaxed);
+    const bool audible = (state_ != TrackState::MUTED);
     float peak = 0.0f;
     for (int ch = 0; ch < config::kNumChannels; ++ch) {
         const float mixed = trackFrame[ch] * userGain * config::kTrackGain;
-        outputFrame[ch] += mixed;
-        if (soloOut != nullptr) {
-            soloOut[ch] = mixed;
+        if (audible) {
+            outputFrame[ch] += mixed;
+            if (soloOut != nullptr) {
+                soloOut[ch] = mixed;
+            }
         }
         peak = std::max(peak, std::fabs(trackFrame[ch] * userGain));
     }
     if (meterFromPlayback) {
-        // VU pos-fader: acompanha o que se ouve.
-        updateLevel(peak);
+        // VU pos-fader, mas PRE-mute: a track mutada continua medida (a
+        // interface mostra em cinza) e so para com o transporte.
+        updateLevel(peak * meterScale);
     }
 }
 
@@ -290,4 +488,55 @@ void AudioTrack::updateLevel(float peak) {
     const float prev = level_.load(std::memory_order_relaxed);
     const float next = (peak > prev) ? peak : prev * levelDecayPerSample_;
     level_.store(next, std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Sessao em disco (nao-RT, com o callback de audio desligado)
+// ---------------------------------------------------------------------------
+
+void AudioTrack::readMix(float* dest, int64_t frames) const {
+    const size_t total = static_cast<size_t>(frames) * config::kNumChannels;
+    std::fill(dest, dest + total, 0.0f);
+    if (mix_ == nullptr) {
+        return;
+    }
+
+    const int64_t usable = std::min(frames, capacitySamples_);
+    const size_t usableTotal = static_cast<size_t>(usable) * config::kNumChannels;
+    std::copy(mix_->data(), mix_->data() + usableTotal, dest);
+
+    // O que a track TOCA: sem o resto dos desfazer em andamento e sem o passe
+    // ainda aberto (que so conta depois de fechado).
+    for (int p = 0; p < peelCount_; ++p) {
+        const Peel& peel = peels_[static_cast<size_t>(p)];
+        const size_t end = std::min(usableTotal, static_cast<size_t>(peel.frames) * config::kNumChannels);
+        for (size_t i = static_cast<size_t>(peel.done); i < end; ++i) {
+            dest[i] -= peel.buffer->data()[i];
+        }
+    }
+    if (capture_ != nullptr) {
+        const size_t end = std::min(usableTotal, static_cast<size_t>(capture_->frames) * config::kNumChannels);
+        for (size_t i = 0; i < end; ++i) {
+            dest[i] -= capture_->data()[i];
+        }
+    }
+    // Um desfazer esperando camada voltar do disco (pendingUndos_) ainda esta
+    // na soma e vai para o arquivo: salvar no exato instante em que se aperta
+    // desfazer numa pilha de centenas de camadas. Aceitavel.
+}
+
+void AudioTrack::loadMix(const float* source, int64_t frames, bool muted) {
+    clearTrack();
+    if (mix_ == nullptr) {
+        return;
+    }
+    const int64_t usable = std::min(frames, capacitySamples_);
+    if (usable <= 0) {
+        return;
+    }
+    std::copy(source, source + static_cast<size_t>(usable) * config::kNumChannels, mix_->data());
+    mixDirtyFrames_ = usable;
+    baseOnly_ = true; // uma camada, sem buffer proprio: desfazer apaga a track
+    state_ = muted ? TrackState::MUTED : TrackState::PLAYING;
+    publishCount();
 }

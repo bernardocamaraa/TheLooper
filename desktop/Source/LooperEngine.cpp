@@ -12,9 +12,15 @@ LooperEngine::LooperEngine() : tracks_{AudioTrack(0), AudioTrack(1), AudioTrack(
     }
 }
 
+LooperEngine::~LooperEngine() {
+    // Para a thread do LayerStore antes de qualquer membro ser destruido.
+    layers_.stop();
+}
+
 void LooperEngine::prepare() {
+    layers_.start(static_cast<int64_t>(config::kMaxLoopSeconds * config::kMaxSupportedSampleRate));
     for (auto& t : tracks_) {
-        t.prepareBuffers();
+        t.prepareBuffers(&layers_);
     }
     setAudioDeviceInfo(config::kPreferredSampleRate, 0);
     recomputeLeds();
@@ -37,6 +43,33 @@ void LooperEngine::setAudioDeviceInfo(double sampleRate, int64_t latencySamples)
         1.0f / std::max(1.0f, static_cast<float>(config::kTransportFadeMs * 0.001 * sampleRate));
     limiterRelease_ =
         1.0f - std::exp(-1.0f / static_cast<float>(config::kLimiterReleaseMs * 0.001 * sampleRate));
+}
+
+void LooperEngine::serviceBlock() {
+    if (!layers_.running()) {
+        return; // plugin ainda nao preparado
+    }
+    LayerRestore restore;
+    while (layers_.popRestore(restore)) {
+        if (restore.track >= 0 && restore.track < config::kNumTracks) {
+            tracks_[restore.track].onRestored(restore);
+        } else {
+            layers_.release(restore.buffer);
+        }
+    }
+    for (auto& t : tracks_) {
+        t.service();
+    }
+}
+
+void LooperEngine::setLoopLength(int64_t frames) {
+    masterLoopLengthSamples_ = frames;
+    for (auto& t : tracks_) {
+        t.setLoopLength(frames);
+    }
+    if (layers_.running()) {
+        layers_.setLoopFrames(frames);
+    }
 }
 
 void LooperEngine::setLatencyTrimMs(double trimMs) {
@@ -232,7 +265,7 @@ void LooperEngine::handleUndo() {
         }
     }
     if (!anyAudio) {
-        masterLoopLengthSamples_ = 0;
+        setLoopLength(0);
         transportPosition_ = 0;
         pendingRewind_ = false;
     }
@@ -265,7 +298,7 @@ bool LooperEngine::closeCapturingTrack() {
         if (!tracks_[idx].closeCapture()) {
             return false;
         }
-        masterLoopLengthSamples_ = length;
+        setLoopLength(length);
         // Posiciona o transporte de forma que o PONTEIRO DE ESCRITA
         // (transportPosition_ - latencySamples_) caia exatamente em 0: o
         // proximo passe continua sem emenda de onde este parou, ja compensado
@@ -304,7 +337,8 @@ void LooperEngine::startCapture(int trackIndex) {
     if (t.beginCapture(masterLoopLengthSamples_)) {
         capturingTrack_ = trackIndex;
     }
-    // Se beginCapture falhar (limite de camadas), simplesmente nao inicia - a
+    // Nao ha limite de camadas: beginCapture so falha se o LayerStore nao
+    // tiver nenhum buffer pronto. Nesse caso simplesmente nao inicia - a
     // track continua tocando o que ja tinha.
 }
 
@@ -324,7 +358,7 @@ void LooperEngine::applyLoadedSession(int64_t lengthSamples, const float* const*
         }
     }
 
-    masterLoopLengthSamples_ = lengthSamples;
+    setLoopLength(lengthSamples);
     transportPosition_ = 0;
     // Parado e com o fade zerado: a musica so comeca quando mandarem tocar.
     transportPlaying_ = false;
@@ -342,7 +376,7 @@ void LooperEngine::clearAll() {
     // Nao mexe em mode_: Clear All so limpa o audio.
     selectedTrack_ = 0;
     capturingTrack_ = -1;
-    masterLoopLengthSamples_ = 0;
+    setLoopLength(0);
     transportPosition_ = 0;
     pendingRewind_ = false;
     transportPlaying_ = true;
@@ -404,7 +438,9 @@ void LooperEngine::processFrame(const float* input, float* output, float* perTra
 
     for (int i = 0; i < config::kNumTracks; ++i) {
         float* solo = (perTrackOut != nullptr) ? perTrackOut + i * config::kNumChannels : nullptr;
-        tracks_[i].mixFrameInto(output, transportPosition_, solo);
+        // transportGain_ no medidor: com o transporte parado o VU cai a zero,
+        // mesmo nas tracks mutadas (que continuam medidas enquanto tocam).
+        tracks_[i].mixFrameInto(output, transportPosition_, solo, transportGain_);
     }
     for (int ch = 0; ch < config::kNumChannels; ++ch) {
         output[ch] *= transportGain_;

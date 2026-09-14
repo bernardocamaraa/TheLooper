@@ -26,9 +26,16 @@ enum class GlobalMode : uint8_t { REC_MODE, PLAY_MODE };
 class LooperEngine {
 public:
     LooperEngine();
+    ~LooperEngine();
 
-    // Nao-RT, chamado uma vez no startup do app.
+    // Nao-RT, chamado uma vez no startup do app: aloca a soma de cada track e
+    // sobe a thread do LayerStore.
     void prepare();
+
+    // RT-safe. Uma vez por bloco de audio, ANTES dos eventos de botao:
+    // recebe as camadas que voltaram do LayerStore e avanca os desfazer em
+    // andamento (ver AudioTrack::service).
+    void serviceBlock();
 
     // Chamado quando o device de audio abre, com os valores REAIS do driver.
     // latencySamples = latencia de ida-e-volta (entrada + saida) reportada
@@ -84,6 +91,11 @@ public:
     TrackState trackState(int i) const { return tracks_[i].state(); }
     float trackLevel(int i) const { return tracks_[i].currentLevel(); }
     int trackLayers(int i) const { return tracks_[i].layerCount(); }
+    // Para o teste: nenhum desfazer em andamento nesta track.
+    bool trackLayersSettled(int i) const { return tracks_[i].layersSettled(); }
+    // Memoria das camadas guardadas (RAM e disco) e orcamento de RAM.
+    LayerStore& layerStore() { return layers_; }
+    const LayerStore& layerStore() const { return layers_; }
     int64_t latencySamples() const { return latencySamples_; }
     // Progresso do loop mestre, 0..1 (para a barra de progresso das janelas).
     double loopProgress() const {
@@ -150,12 +162,18 @@ private:
     bool cancelCapturingTrack();
     void startCapture(int trackIndex);
     void clearAll();
+    // O UNICO lugar que muda masterLoopLengthSamples_: avisa as tracks e o
+    // LayerStore (que passa a preparar buffers do tamanho novo).
+    void setLoopLength(int64_t frames);
     void recomputeLeds();
     void recomputeLatency();
     void updateMetering();
     void applyLimiter(float* frame);
     int64_t writePositionFor(int64_t readPosition) const;
 
+    // Declarado ANTES das tracks: elas guardam um ponteiro para ele, entao ele
+    // tem de nascer antes e morrer depois delas.
+    LayerStore layers_;
     AudioTrack tracks_[config::kNumTracks];
 
     GlobalMode mode_ = GlobalMode::REC_MODE;

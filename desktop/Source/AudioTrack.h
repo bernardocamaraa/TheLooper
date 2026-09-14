@@ -1,12 +1,19 @@
-// Uma track de looper: pilha de camadas (layers) estereo + estado.
+// Uma track de looper: camadas (layers) estereo + estado.
 //
-// Cada uma das config::kMaxLayersPerTrack camadas e um buffer PRE-ALOCADO de
-// tamanho fixo, alocado uma unica vez no startup (prepareBuffers(), fora da
-// thread de audio). Nao ha pool compartilhado, nao ha alocacao em background,
-// nao ha handoff entre threads - a track e dona direta de todos os seus
-// slots, e reivindicar uma camada nova e so avancar layerCount_ (que tambem
-// serve como indice do proximo slot livre, ja que camadas sao sempre
-// reivindicadas em ordem e liberadas em ordem LIFO pelo undo).
+// CAMADAS INFINITAS. A track toca UMA soma pre-mixada (mix_) com todas as
+// camadas fechadas e o passe em andamento - o custo por amostra e o mesmo com
+// 1 ou 500 camadas. Cada camada tambem fica guardada SEPARADA, so para poder
+// ser desfeita: as mais recentes aqui, num array fixo (recent_), e as mais
+// antigas com o LayerStore, que as despeja em disco quando passam do
+// orcamento de RAM (ver LayerStore.h). A thread de audio nunca aloca, zera ou
+// espera: os buffers chegam prontos e zerados do LayerStore.
+//
+// Gravar escreve a entrada em DOIS lugares: na camada (capture_, para o
+// desfazer) e direto na soma (para o overdub ser ouvido ja na volta seguinte).
+// Desfazer tira a camada da soma AOS POUCOS, um pedaco por bloco (service());
+// enquanto isso a leitura subtrai o que falta na hora, entao o som some
+// imediatamente. Desfazer a ULTIMA camada troca a soma por uma zerada, em vez
+// de subtrair: a track fica em silencio exato, sem residuo numerico.
 //
 // Estado unificado: gravar a camada base e gravar uma camada de overdub NAO
 // sao estados separados - as duas sao apenas RECORDING.
@@ -24,19 +31,23 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <vector>
 
 #include "Config.h"
+#include "LayerStore.h"
 
 enum class TrackState : uint8_t { EMPTY, RECORDING, PLAYING, MUTED };
 
 class AudioTrack {
 public:
     explicit AudioTrack(int trackIndex);
+    ~AudioTrack();
 
-    // Chamado uma vez no startup do app (nao-RT): reserva as
-    // config::kMaxLayersPerTrack camadas.
-    void prepareBuffers();
+    AudioTrack(const AudioTrack&) = delete;
+    AudioTrack& operator=(const AudioTrack&) = delete;
+
+    // Chamado uma vez no startup do app (nao-RT): aloca a soma da track e
+    // passa a pegar os buffers de camada do LayerStore.
+    void prepareBuffers(LayerStore* store);
 
     // Chamado quando o device de audio abre (nao-RT): ajusta a capacidade
     // util em frames a partir da sample rate REAL do driver. Se o device
@@ -44,32 +55,25 @@ public:
     // loop cai proporcionalmente (os buffers ja estao alocados).
     void setSampleRate(double sampleRate);
 
+    // Comprimento do loop mestre (0 = ainda nao definido). A LooperEngine
+    // avisa sempre que ele muda; e o trecho que o desfazer percorre.
+    void setLoopLength(int64_t frames) { loopLength_ = frames; }
+
     // --- Transicoes de FSM (RT-safe, chamadas SO pela LooperEngine) ---
 
-    // Reivindica uma camada nova e entra em RECORDING.
-    //
-    // masterLoopLengthSamples == 0 significa "esta captura e a que vai
-    // DEFINIR o comprimento do loop mestre": o buffer nao e limpo (o
-    // comprimento final ainda e desconhecido) e writeFrame sobrescreve, ja
-    // que cada posicao e visitada exatamente uma vez, em ordem.
-    //
-    // masterLoopLengthSamples > 0: o trecho relevante do slot e ZERADO antes
-    // do uso e writeFrame acumula. Zerar e obrigatorio - o slot pode conter
-    // audio de um passe anterior que foi desfeito (peel) ou limpo, e sem
-    // isso esse audio antigo voltava a tocar nos trechos que a nova captura
-    // ainda nao tinha sobrescrito ("audio fantasma"). Isso acontecia SEMPRE
-    // na camada base das tracks 2-4, porque elas comecam a gravar na posicao
-    // atual do transporte, nunca em 0.
-    //
-    // Retorna false se o limite de camadas ja foi atingido.
+    // Pega um buffer zerado para a camada nova e entra em RECORDING.
+    // masterLoopLengthSamples == 0 significa "esta captura e a que vai DEFINIR
+    // o comprimento do loop mestre" (buffer cheio, ja que o comprimento ainda
+    // e desconhecido, e ela nao toca enquanto grava - ver mixFrameInto).
+    // Retorna false so se o LayerStore nao tiver buffer pronto.
     bool beginCapture(int64_t masterLoopLengthSamples);
 
     // Fecha a captura em andamento, commitando-a como camada nova -> PLAYING.
     // Retorna false se nao havia captura em andamento (no-op seguro).
     bool closeCapture();
 
-    // Aborta a captura em andamento SEM commitar - volta para PLAYING (se ja
-    // havia camadas) ou EMPTY.
+    // Aborta a captura em andamento SEM commitar (tira da soma o que ela ja
+    // tinha gravado) - volta para PLAYING (se ja havia camadas) ou EMPTY.
     bool cancelCapture();
 
     // "Peel": remove a camada commitada mais recente, incluindo a base se for
@@ -83,30 +87,41 @@ public:
     // Limpa a track inteira -> EMPTY.
     void clearTrack();
 
+    // --- Manutencao (RT-safe, uma vez por bloco de audio) ---
+
+    // Avanca os desfazer em andamento e troca camadas com o LayerStore.
+    void service();
+
+    // Uma camada pedida de volta ao LayerStore chegou.
+    void onRestored(const LayerRestore& restore);
+
     // --- Processamento por frame (RT-safe) ---
 
     // Grava um frame de entrada na camada ativa, na posicao dada (que a
     // LooperEngine ja compensou pela latencia do driver).
     void writeFrame(const float* inputFrame, int64_t position);
 
-    // Soma as camadas desta track em outputFrame - as ja commitadas E a que
-    // estiver em andamento (para o overdub ser ouvido ja na volta seguinte do
-    // loop, e nao so depois de fechar o passe).
+    // Soma esta track em outputFrame.
     //
     // soloOut (opcional) recebe a contribuicao SO desta track, ja com fader e
     // mute aplicados, para a versao plugin poder mandar cada track para uma
     // saida propria (uma track do mixer do FL). E escrito, nao somado, e vale
     // 0 quando a track esta muda ou vazia. Fica ANTES do limiter, que e um
     // processo de barramento e continua valendo so para o mix.
-    void mixFrameInto(float* outputFrame, int64_t position, float* soloOut = nullptr);
+    //
+    // meterScale multiplica o nivel do VU (a LooperEngine passa o ganho do
+    // fade de transporte): com o transporte parado o medidor cai a zero.
+    void mixFrameInto(float* outputFrame, int64_t position, float* soloOut = nullptr,
+                      float meterScale = 1.0f);
 
     // --- Origem do VU meter ---
     //
-    // Normalmente o medidor mostra o que a track REPRODUZ. Na track
-    // selecionada (a que vai receber a proxima gravacao) ele passa a mostrar
-    // a ENTRADA ja roteada, mesmo com a track parada ou vazia: e assim que da
-    // para ver se ha sinal chegando e dosar o trim ANTES de apertar REC, em
-    // vez de gravar no escuro e descobrir depois.
+    // Normalmente o medidor mostra o que a track REPRODUZ - inclusive MUTADA:
+    // o som continua medido (a interface pinta de cinza), so nao vai para a
+    // saida. Na track selecionada (a que vai receber a proxima gravacao) ele
+    // passa a mostrar a ENTRADA ja roteada, mesmo com a track parada ou vazia:
+    // e assim que da para ver se ha sinal chegando e dosar o trim ANTES de
+    // apertar REC, em vez de gravar no escuro e descobrir depois.
     void setMeterInput(bool meterInput) { meterInput_ = meterInput; }
     void meterInputFrame(const float* inputFrame);
 
@@ -133,26 +148,41 @@ public:
     // (ver MainComponent::saveLoop/openLoop).
     //
     // O que vai para o arquivo e a SOMA das camadas - o que a track toca -, e
-    // nao as camadas separadas. Ao abrir, a track volta com UMA camada so:
-    // e a diferenca de gravar aqui e trazer pronto de casa, entao o UNDO nao
-    // desfaz camada por camada de uma musica aberta, ele apaga a track. O
-    // fader nao entra na soma: o volume e guardado como numero, para poder ser
-    // mexido depois de abrir sem estragar o audio.
+    // nao as camadas separadas. Ao abrir, a track volta com UMA camada so
+    // (sem buffer proprio: ela e a soma inteira), entao o UNDO nao desfaz
+    // camada por camada de uma musica aberta, ele apaga a track. O fader nao
+    // entra na soma: o volume e guardado como numero.
     void readMix(float* dest, int64_t frames) const;
     void loadMix(const float* source, int64_t frames, bool muted);
 
     TrackState state() const { return state_; }
     bool isCapturing() const { return state_ == TrackState::RECORDING; }
-    int layerCount() const { return layerCount_; }
-    bool hasAudio() const { return layerCount_ > 0; }
-    bool layersFull() const { return layerCount_ >= config::kMaxLayersPerTrack; }
+    // Camadas que a track tem (para a GUI; lock-free).
+    int layerCount() const { return publishedLayers_.load(std::memory_order_relaxed); }
+    bool hasAudio() const { return effectiveLayers() > 0; }
     int trackIndex() const { return trackIndex_; }
     int64_t capacitySamples() const { return capacitySamples_; }
+
+    // Nenhum desfazer em andamento nem esperando camada voltar do disco.
+    bool layersSettled() const { return peelCount_ == 0 && pendingUndos_ == 0; }
 
     // Nivel (peak com decay) do ultimo bloco, para o VU meter da GUI.
     float currentLevel() const { return level_.load(std::memory_order_relaxed); }
 
 private:
+    struct Peel {
+        LayerBuffer* buffer = nullptr;
+        int64_t done = 0;    // amostras (nao frames) ja subtraidas da soma
+        int64_t frames = 0;  // trecho que a camada ocupa
+    };
+
+    int committedLayers() const { return recentCount_ + deepCount_ + (baseOnly_ ? 1 : 0); }
+    int effectiveLayers() const { return committedLayers() - pendingUndos_; }
+    void publishCount();
+    void pushRecent(LayerBuffer* layer);
+    void startPeel(LayerBuffer* layer);
+    void finishPeel(int index);
+    void resetMix();
     void updateLevel(float peak);
 
     // Aplica o roteamento de entrada: copia o frame de entrada para out,
@@ -162,16 +192,37 @@ private:
     int trackIndex_;
     TrackState state_ = TrackState::EMPTY;
 
-    std::array<std::vector<float>, config::kMaxLayersPerTrack> slots_;
-    int64_t allocatedFrames_ = 0;  // tamanho fisico dos slots
+    LayerStore* store_ = nullptr;
+    int64_t allocatedFrames_ = 0;  // tamanho fisico da soma
     int64_t capacitySamples_ = 0;  // capacidade util (<= allocatedFrames_), depende da sample rate real
+    int64_t loopLength_ = 0;
 
-    int layerCount_ = 0;
-    float* activeBuffer_ = nullptr; // slots_[layerCount_].data() enquanto RECORDING
+    LayerBuffer* mix_ = nullptr;     // soma das camadas fechadas + o passe atual
+    int64_t mixDirtyFrames_ = 0;     // ate onde a soma ja recebeu audio
 
-    // true quando a captura em andamento e a que esta definindo o loop mestre
-    // (sobrescreve em vez de acumular - ver beginCapture).
+    LayerBuffer* capture_ = nullptr; // camada em gravacao
+    // true quando a captura em andamento e a que esta definindo o loop mestre.
     bool captureDefinesMaster_ = false;
+
+    // Camadas recentes, da mais antiga [0] para a mais nova.
+    std::array<LayerBuffer*, config::kRecentLayerSlots> recent_{};
+    int recentCount_ = 0;
+    int deepCount_ = 0;       // guardadas no LayerStore (RAM ou disco)
+    bool baseOnly_ = false;   // camada base sem buffer (sessao aberta de arquivo)
+
+    std::array<Peel, config::kMaxPendingPeels> peels_{};
+    int peelCount_ = 0;
+
+    // Desfazer pedidos quando a camada a tirar ainda estava no LayerStore:
+    // sao aplicados quando ela volta (onRestored).
+    int pendingUndos_ = 0;
+    bool refillOutstanding_ = false;
+    int refillExpected_ = 0;
+    // Muda a cada limpeza: camadas pedidas antes dela chegam com a geracao
+    // velha e sao descartadas.
+    uint32_t generation_ = 0;
+
+    std::atomic<int> publishedLayers_{0};
 
     std::atomic<float> level_{0.0f};
     float levelDecayPerSample_ = 0.0f;

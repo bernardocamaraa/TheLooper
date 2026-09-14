@@ -49,6 +49,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChan
     // herda o estrangulamento do processo se nao se registrar - ver RtThread.h.
     rt::joinProAudio();
 
+    // Antes dos botoes: camadas que voltaram do LayerStore ja entram antes de
+    // um desfazer que chegue neste mesmo bloco.
+    looperEngine_.serviceBlock();
+
     // Pedal e interface entram pelo mesmo caminho da FSM - o looper nao
     // distingue de onde veio o toque.
     ButtonEventMsg evt;

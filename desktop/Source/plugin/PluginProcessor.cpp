@@ -44,7 +44,7 @@ PedalLooperProcessor::PedalLooperProcessor()
     for (int i = 0; i < config::kNumTracks; ++i) {
         trackNames_[static_cast<size_t>(i)] = config::kDefaultTrackNames[i];
     }
-    // De proposito NAO chama looperEngine_.prepare() aqui: ele aloca ~550 MB
+    // De proposito NAO chama looperEngine_.prepare() aqui: ele aloca ~250 MB
     // de buffers de loop, e o FL instancia o plugin so para varrer a pasta.
     // Fica para o prepareToPlay, que so acontece quando o plugin vai mesmo
     // processar audio.
@@ -96,6 +96,7 @@ bool PedalLooperProcessor::isBusesLayoutSupported(const BusesLayout& layouts) co
 }
 
 void PedalLooperProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
+    looperEngine_.serviceBlock(); // camadas infinitas: ver LooperEngine::serviceBlock
     juce::ScopedNoDenormals noDenormals;
 
     // Pedal e interface entram pelo mesmo caminho da FSM - o looper nao
