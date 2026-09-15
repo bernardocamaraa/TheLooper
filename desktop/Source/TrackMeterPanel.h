@@ -22,8 +22,8 @@ public:
 
     // inputMask e mostrado como texto: na janela de performance, saber qual
     // entrada alimenta cada track e o que explica o que o VU esta medindo.
-    // Na track selecionada o medidor mostra a ENTRADA (ver
-    // AudioTrack::setMeterInput), e o rotulo aparece destacado.
+    // Na track selecionada o rotulo da entrada aparece destacado (o medidor
+    // mostra sempre o que a track toca).
     void update(const juce::String& name, TrackState state, bool selectedInRecMode, int layerCount,
                 uint32_t inputMask);
 

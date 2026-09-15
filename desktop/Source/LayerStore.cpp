@@ -112,7 +112,7 @@ LayerBuffer* LayerStore::takeFull() {
     return nullptr;
 }
 
-LayerBuffer* LayerStore::takeLoop(int64_t minFrames) {
+LayerBuffer* LayerStore::takeLoopOnly(int64_t minFrames) {
     LayerBuffer* buffer = nullptr;
     while (loopPool_.pop(buffer)) {
         loopInQueue_.fetch_sub(1, std::memory_order_relaxed);
@@ -121,8 +121,15 @@ LayerBuffer* LayerStore::takeLoop(int64_t minFrames) {
         }
         release(buffer); // de um loop anterior, mais curto
     }
+    return nullptr;
+}
+
+LayerBuffer* LayerStore::takeLoop(int64_t minFrames) {
+    if (LayerBuffer* buffer = takeLoopOnly(minFrames)) {
+        return buffer;
+    }
     // Sem buffer do tamanho do loop (acabou de ser definido, por exemplo): um
-    // cheio serve, so ocupa mais memoria.
+    // cheio serve, so ocupa mais memoria (e e aparado ao ser guardado).
     return takeFull();
 }
 
@@ -197,7 +204,11 @@ void LayerStore::run() {
             worked = true;
         }
         topUpPools();
-        spillIfOverBudget();
+        // Um despejo por volta: gravar em disco e lento, e manter cheias as
+        // reservas da thread de audio vem sempre antes.
+        if (spillOneIfOverBudget()) {
+            worked = true;
+        }
         if (!worked) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -214,9 +225,19 @@ void LayerStore::handle(const Request& request) {
             if (request.buffer == nullptr) {
                 break;
             }
+            LayerBuffer* buffer = request.buffer;
+            if (loopFrames_ > 0 && buffer->frames > loopFrames_) {
+                // Camada num buffer cheio (o passe que definiu o loop, ou uma
+                // volta que pegou um cheio por falta de outro): guarda so o
+                // trecho do loop. 23 MB viram o tamanho real da camada.
+                LayerBuffer* trimmed = allocate(loopFrames_);
+                std::copy(buffer->data(), buffer->data() + loopFrames_ * config::kNumChannels, trimmed->data());
+                recycle(buffer);
+                buffer = trimmed;
+            }
             DeepLayer layer;
-            layer.buffer = request.buffer;
-            layer.frames = request.buffer->frames;
+            layer.buffer = buffer;
+            layer.frames = buffer->frames; // o aparado, nao o original
             ramBytes_.fetch_add(static_cast<int64_t>(layer.buffer->bytes()), std::memory_order_relaxed);
             deep_[request.track].push_back(std::move(layer));
             break;
@@ -309,29 +330,27 @@ void LayerStore::topUpPools() {
     }
 }
 
-void LayerStore::spillIfOverBudget() {
-    if (spillDir_.empty()) {
-        return;
+bool LayerStore::spillOneIfOverBudget() {
+    if (spillDir_.empty() ||
+        ramBytes_.load(std::memory_order_relaxed) <= ramBudgetBytes_.load(std::memory_order_relaxed) ||
+        std::chrono::steady_clock::now() < spillRetryAt_) {
+        return false;
     }
-    // As mais antigas de cada track vao primeiro: sao as ultimas que o
-    // desfazer vai precisar.
-    while (ramBytes_.load(std::memory_order_relaxed) > ramBudgetBytes_.load(std::memory_order_relaxed)) {
-        bool spilled = false;
-        for (int t = 0; t < config::kNumTracks && !spilled; ++t) {
-            for (auto& layer : deep_[t]) {
-                if (layer.buffer != nullptr) {
-                    if (!spill(t, layer)) {
-                        return; // disco cheio ou sem permissao: fica na RAM
-                    }
-                    spilled = true;
-                    break;
+    // A mais antiga guardada na RAM vai primeiro: e a ultima que o desfazer
+    // vai precisar.
+    for (int t = 0; t < config::kNumTracks; ++t) {
+        for (auto& layer : deep_[t]) {
+            if (layer.buffer != nullptr) {
+                if (spill(t, layer)) {
+                    return true;
                 }
+                // Disco cheio ou sem permissao: fica na RAM e tenta mais tarde.
+                spillRetryAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                return false;
             }
         }
-        if (!spilled) {
-            return; // nada mais na RAM para despejar
-        }
     }
+    return false; // nada mais na RAM para despejar
 }
 
 bool LayerStore::spill(int track, DeepLayer& layer) {

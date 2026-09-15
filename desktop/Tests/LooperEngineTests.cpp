@@ -59,6 +59,14 @@ public:
             const float v = signal(seed, i);
             if (capturing_ >= 0) {
                 const auto pos = static_cast<size_t>(std::llround(engine.loopPositionSeconds() * kSampleRate));
+                // Cada volta de overdub e uma camada: quando a escrita passa
+                // pelo comeco do loop, a volta anterior fecha (igual ao motor).
+                if (pos == 0 && engine.masterLoopLength() > 0 && !current_->empty()) {
+                    current_->resize(static_cast<size_t>(engine.masterLoopLength()) * 2, 0.0f);
+                    layers_[capturing_].push_back(std::move(*current_));
+                    current_ = std::make_unique<std::vector<float>>();
+                    ++layersAtStart_;
+                }
                 auto& layer = *current_;
                 if (layer.size() < (pos + 1) * 2) {
                     layer.resize((pos + 1) * 2, 0.0f);
@@ -207,6 +215,7 @@ void testInfiniteLayersAndUndoAll() {
     recordLayers(h, 300, 1);
     expect(h.settle(), "tudo assentado depois de gravar");
     expect(h.engine.trackLayers(0) == 300, "a track tem 300 camadas");
+    expect(h.engine.bufferShortages() == 0, "nunca faltou buffer para abrir camada");
     expect(h.matches(0), "soma = as 300 camadas");
     expect(h.engine.layerStore().diskBytes() > 0, "camadas antigas foram para o disco");
 
@@ -259,9 +268,13 @@ void testMultiTrackCancelClear() {
     expect(h.settle() && h.allMatch(), "passe cancelado sumiu da soma");
 
     h.press(kButtonTrack2);
-    h.press(kButtonUndo);              // unica camada da track 2
-    h.undoExpected(1);
-    expect(h.settle() && h.allMatch() && h.engine.loopDefined(), "track 2 limpa, loop mestre continua");
+    bool lapsOk = h.expectedLayers(1) >= 2; // o passe de 1,5 volta virou mais de uma camada
+    while (h.expectedLayers(1) > 0) {
+        h.press(kButtonUndo);
+        h.undoExpected(1);
+        lapsOk = h.settle() && h.allMatch() && lapsOk;
+    }
+    expect(lapsOk && h.engine.loopDefined(), "track 2 desfeita volta a volta, loop mestre continua");
 
     h.press(kButtonUndo, protocol::kGestureLongPress); // Clear All
     h.clearExpected();
@@ -293,6 +306,34 @@ void testLoadedSession() {
     expect(h.settle() && h.allMatch() && !h.engine.loopDefined(), "desfazer a base apaga a track");
 }
 
+void testOverdubLaps() {
+    std::printf("\n5) Overdub sem parar por 5 voltas = 5 camadas, desfeitas uma a uma\n");
+    Harness h;
+    h.press(kButtonRecPlay);           // passe que define o loop
+    h.run(kLoopFrames, 1200);
+    h.press(kButtonRecPlay);           // fecha e ja abre o overdub
+    h.breathe();
+    h.run(kLoopFrames * 5, 1300);      // 5 voltas seguidas, sem apertar nada
+    h.press(kButtonRecPlay);           // fecha a ultima volta
+    expect(h.settle() && h.engine.trackLayers(0) == 6, "base + 5 voltas = 6 camadas");
+    expect(h.allMatch(), "cada volta guardou exatamente o que foi tocado nela");
+    expect(h.engine.bufferShortages() == 0, "nenhuma volta ficou sem buffer");
+
+    bool ok = true;
+    for (int k = 0; k < 5; ++k) {
+        h.press(kButtonUndo);
+        h.undoExpected(0);
+        ok = h.settle() && h.allMatch() && ok;
+    }
+    expect(ok && h.engine.trackLayers(0) == 1, "cada desfazer tirou uma volta; sobrou a base");
+
+    h.press(kButtonRecPlay);           // overdub de novo...
+    h.run(kLoopFrames * 2 + kLoopFrames / 2, 1400);
+    h.press(kButtonUndo);              // ...desfazer no meio cancela so a volta em andamento
+    expect(h.settle() && h.allMatch() && h.engine.trackLayers(0) == 3,
+           "desfazer gravando cancela so a volta atual, as 2 inteiras ficam");
+}
+
 } // namespace
 
 int main() {
@@ -301,6 +342,7 @@ int main() {
     testRapidUndo();
     testMultiTrackCancelClear();
     testLoadedSession();
+    testOverdubLaps();
     std::printf("\n%s (%d falha%s)\n", failures == 0 ? "TUDO OK" : "HOUVE FALHAS", failures,
                 failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

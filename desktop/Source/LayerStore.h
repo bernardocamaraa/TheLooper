@@ -22,6 +22,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <thread>
@@ -79,6 +80,9 @@ public:
     // Buffer zerado com pelo menos minFrames: tenta os do tamanho do loop e,
     // se nao houver, usa um cheio. nullptr se nao ha nenhum pronto.
     LayerBuffer* takeLoop(int64_t minFrames);
+    // So buffers do tamanho do loop, sem cair para um cheio: e o que as
+    // reservas das tracks usam (os cheios ficam para a soma de track limpa).
+    LayerBuffer* takeLoopOnly(int64_t minFrames);
 
     // Devolve um buffer que nao e mais usado (ele e zerado e reaproveitado,
     // ou destruido). Aceita nullptr.
@@ -134,7 +138,7 @@ private:
     void handle(const Request& request);
     void recycle(LayerBuffer* buffer);
     void topUpPools();
-    void spillIfOverBudget();
+    bool spillOneIfOverBudget();
     bool spill(int track, DeepLayer& layer);
     void ensureInRam(DeepLayer& layer);
     void dropDeep(DeepLayer& layer);
@@ -160,6 +164,9 @@ private:
     std::vector<DeepLayer> deep_[config::kNumTracks]; // frente = mais antiga
     std::filesystem::path spillDir_;                  // vazio = sem disco, tudo na RAM
     uint64_t spillCounter_ = 0;
+    // Depois de uma falha de escrita (disco cheio), espera antes de tentar de
+    // novo em vez de insistir a cada 2 ms.
+    std::chrono::steady_clock::time_point spillRetryAt_{};
 
     std::atomic<int64_t> ramBudgetBytes_{config::kDefaultLayerRamBudgetBytes};
     std::atomic<int64_t> ramBytes_{0};

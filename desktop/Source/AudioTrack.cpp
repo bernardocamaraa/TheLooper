@@ -16,6 +16,9 @@ AudioTrack::~AudioTrack() {
     for (int i = 0; i < peelCount_; ++i) {
         delete peels_[static_cast<size_t>(i)].buffer;
     }
+    for (int i = 0; i < reserveCount_; ++i) {
+        delete reserve_[static_cast<size_t>(i)];
+    }
 }
 
 void AudioTrack::prepareBuffers(LayerStore* store) {
@@ -56,7 +59,7 @@ bool AudioTrack::beginCapture(int64_t masterLoopLengthSamples) {
     // audio de um passe anterior voltava a tocar nos trechos que a nova
     // captura ainda nao tinha coberto ("audio fantasma").
     captureDefinesMaster_ = (masterLoopLengthSamples <= 0);
-    LayerBuffer* buffer = captureDefinesMaster_ ? store_->takeFull() : store_->takeLoop(masterLoopLengthSamples);
+    LayerBuffer* buffer = takeLayerBuffer(captureDefinesMaster_);
     if (buffer == nullptr) {
         captureDefinesMaster_ = false;
         return false; // nenhum buffer pronto (so acontece se o LayerStore nao acompanhar)
@@ -75,6 +78,20 @@ bool AudioTrack::closeCapture() {
     capture_ = nullptr;
     captureDefinesMaster_ = false;
     state_ = TrackState::PLAYING;
+    publishCount();
+    return true;
+}
+
+bool AudioTrack::splitCapture() {
+    if (capture_ == nullptr || captureDefinesMaster_ || store_ == nullptr) {
+        return false;
+    }
+    LayerBuffer* next = takeLayerBuffer(false);
+    if (next == nullptr) {
+        return false; // sem buffer pronto: a proxima volta continua nesta camada
+    }
+    pushRecent(capture_);
+    capture_ = next;
     publishCount();
     return true;
 }
@@ -240,6 +257,52 @@ void AudioTrack::finishPeel(int index) {
     --peelCount_;
 }
 
+LayerBuffer* AudioTrack::takeLayerBuffer(bool full) {
+    if (store_ == nullptr) {
+        return nullptr;
+    }
+    if (full || loopLength_ <= 0) {
+        return store_->takeFull(); // passe que define o loop: tamanho ainda desconhecido
+    }
+    for (int i = reserveCount_ - 1; i >= 0; --i) {
+        LayerBuffer* buffer = reserve_[static_cast<size_t>(i)];
+        if (buffer->frames >= loopLength_) {
+            reserve_[static_cast<size_t>(i)] = reserve_[static_cast<size_t>(reserveCount_ - 1)];
+            reserve_[static_cast<size_t>(reserveCount_ - 1)] = nullptr;
+            --reserveCount_;
+            return buffer;
+        }
+    }
+    return store_->takeLoop(loopLength_);
+}
+
+void AudioTrack::topUpReserve() {
+    // A reserva so existe enquanto a track GRAVA (e quem abre uma volta nova a
+    // cada passagem pelo comeco do loop). Parada, devolve: com um loop de 60 s
+    // as 4 tracks segurando reserva seriam ~180 MB parados.
+    const bool recording = (state_ == TrackState::RECORDING);
+    // Descarta tambem os de um loop anterior (ou de quando nao havia loop).
+    for (int i = 0; i < reserveCount_;) {
+        LayerBuffer* buffer = reserve_[static_cast<size_t>(i)];
+        if (!recording || loopLength_ <= 0 || buffer->frames < loopLength_) {
+            store_->release(buffer);
+            reserve_[static_cast<size_t>(i)] = reserve_[static_cast<size_t>(reserveCount_ - 1)];
+            reserve_[static_cast<size_t>(reserveCount_ - 1)] = nullptr;
+            --reserveCount_;
+        } else {
+            ++i;
+        }
+    }
+    while (recording && loopLength_ > 0 && reserveCount_ < config::kTrackReserveBuffers) {
+        LayerBuffer* buffer = store_->takeLoopOnly(loopLength_);
+        if (buffer == nullptr) {
+            break;
+        }
+        reserve_[static_cast<size_t>(reserveCount_)] = buffer;
+        ++reserveCount_;
+    }
+}
+
 void AudioTrack::publishCount() {
     publishedLayers_.store(std::max(0, effectiveLayers()), std::memory_order_relaxed);
 }
@@ -297,6 +360,9 @@ void AudioTrack::service() {
             refillExpected_ = want;
         }
     }
+
+    // 4. Reserva da track cheia para as proximas voltas.
+    topUpReserve();
 }
 
 void AudioTrack::onRestored(const LayerRestore& restore) {
@@ -367,20 +433,6 @@ void AudioTrack::routeInput(const float* in, float* out) const {
     }
 }
 
-void AudioTrack::meterInputFrame(const float* inputFrame) {
-    if (!meterInput_) {
-        return;
-    }
-    float routed[config::kNumChannels];
-    routeInput(inputFrame, routed);
-
-    float peak = 0.0f;
-    for (int ch = 0; ch < config::kNumChannels; ++ch) {
-        peak = std::max(peak, std::fabs(routed[ch]));
-    }
-    updateLevel(peak);
-}
-
 void AudioTrack::writeFrame(const float* inputFrame, int64_t position) {
     if (capture_ == nullptr || state_ != TrackState::RECORDING) {
         return;
@@ -431,10 +483,9 @@ void AudioTrack::mixFrameInto(float* outputFrame, int64_t position, float* soloO
     const bool hasContent =
         (committedLayers() > 0) || (capture_ != nullptr && !captureDefinesMaster_);
 
-    // Quem alimenta o medidor quando meterInput_ esta ligado e
-    // meterInputFrame(); gravando, e writeFrame(). Nos dois casos a
-    // reproducao nao pode sobrescrever o nivel.
-    const bool meterFromPlayback = !meterInput_ && (state_ != TrackState::RECORDING);
+    // Gravando, quem alimenta o medidor e writeFrame() (a entrada que esta
+    // sendo escrita); a reproducao nao pode sobrescrever o nivel.
+    const bool meterFromPlayback = (state_ != TrackState::RECORDING);
 
     if (!hasContent || mix_ == nullptr || position < 0 || position >= capacitySamples_) {
         if (meterFromPlayback) {

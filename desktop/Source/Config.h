@@ -71,6 +71,11 @@ constexpr int64_t kPeelSamplesPerBlock = int64_t{1} << 17;
 constexpr int kSpareFullBuffers = 6;
 constexpr int kSpareLoopBuffers = 4;
 
+// Alem da reserva comum, cada track guarda na mao estes buffers do tamanho do
+// loop: se a thread do LayerStore demorar (gravando em disco, por exemplo), o
+// overdub ainda tem onde abrir as proximas voltas sem perder nada.
+constexpr int kTrackReserveBuffers = 2;
+
 // Acima disto, as camadas guardadas pelo LayerStore mais antigas vao para
 // arquivos temporarios em disco (e voltam quando o desfazer chega nelas).
 constexpr int64_t kDefaultLayerRamBudgetBytes = int64_t{1536} * 1024 * 1024;

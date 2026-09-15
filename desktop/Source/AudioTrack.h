@@ -72,6 +72,12 @@ public:
     // Retorna false se nao havia captura em andamento (no-op seguro).
     bool closeCapture();
 
+    // Overdub sem parar: fecha a volta que terminou como camada e continua
+    // gravando numa camada nova, sem mudar de estado. Chamado pela LooperEngine
+    // quando a escrita passa pelo comeco do loop. Retorna false (e a volta
+    // seguinte continua na mesma camada) se nao houver buffer pronto.
+    bool splitCapture();
+
     // Aborta a captura em andamento SEM commitar (tira da soma o que ela ja
     // tinha gravado) - volta para PLAYING (se ja havia camadas) ou EMPTY.
     bool cancelCapture();
@@ -114,16 +120,13 @@ public:
     void mixFrameInto(float* outputFrame, int64_t position, float* soloOut = nullptr,
                       float meterScale = 1.0f);
 
-    // --- Origem do VU meter ---
+    // --- VU meter ---
     //
-    // Normalmente o medidor mostra o que a track REPRODUZ - inclusive MUTADA:
-    // o som continua medido (a interface pinta de cinza), so nao vai para a
-    // saida. Na track selecionada (a que vai receber a proxima gravacao) ele
-    // passa a mostrar a ENTRADA ja roteada, mesmo com a track parada ou vazia:
-    // e assim que da para ver se ha sinal chegando e dosar o trim ANTES de
-    // apertar REC, em vez de gravar no escuro e descobrir depois.
-    void setMeterInput(bool meterInput) { meterInput_ = meterInput; }
-    void meterInputFrame(const float* inputFrame);
+    // O medidor mostra o que a track REPRODUZ (pos-fader) - inclusive a
+    // selecionada e a MUTADA, que continua medida (a interface pinta de cinza)
+    // e so nao vai para a saida. So a track GRAVANDO mostra a entrada que esta
+    // sendo escrita. (Ja houve uma versao em que a track selecionada media a
+    // entrada; o usuario preferiu ver sempre o que toca.)
 
     // --- Mixer (chamado da thread da GUI; lido da thread de audio) ---
     //
@@ -182,6 +185,9 @@ private:
     void pushRecent(LayerBuffer* layer);
     void startPeel(LayerBuffer* layer);
     void finishPeel(int index);
+    // Buffer zerado para uma camada: da reserva da track, senao do LayerStore.
+    LayerBuffer* takeLayerBuffer(bool full);
+    void topUpReserve();
     void resetMix();
     void updateLevel(float peak);
 
@@ -213,6 +219,10 @@ private:
     std::array<Peel, config::kMaxPendingPeels> peels_{};
     int peelCount_ = 0;
 
+    // Buffers do tamanho do loop ja na mao (ver config::kTrackReserveBuffers).
+    std::array<LayerBuffer*, config::kTrackReserveBuffers> reserve_{};
+    int reserveCount_ = 0;
+
     // Desfazer pedidos quando a camada a tirar ainda estava no LayerStore:
     // sao aplicados quando ela volta (onRestored).
     int pendingUndos_ = 0;
@@ -226,8 +236,6 @@ private:
 
     std::atomic<float> level_{0.0f};
     float levelDecayPerSample_ = 0.0f;
-
-    bool meterInput_ = false; // so a thread de audio toca nisto
 
     std::atomic<uint32_t> inputMask_{config::kDefaultInputMask};
     std::atomic<float> gain_{config::kDefaultTrackGain};

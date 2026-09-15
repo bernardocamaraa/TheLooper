@@ -93,6 +93,10 @@ public:
     int trackLayers(int i) const { return tracks_[i].layerCount(); }
     // Para o teste: nenhum desfazer em andamento nesta track.
     bool trackLayersSettled(int i) const { return tracks_[i].layersSettled(); }
+    // Quantas vezes faltou buffer pronto para abrir uma camada (gravacao que
+    // nao comecou, ou volta de overdub que ficou junto da anterior). Tem de
+    // ficar em zero; se subir, a interface avisa.
+    int bufferShortages() const { return bufferShortages_.load(std::memory_order_relaxed); }
     // Memoria das camadas guardadas (RAM e disco) e orcamento de RAM.
     LayerStore& layerStore() { return layers_; }
     const LayerStore& layerStore() const { return layers_; }
@@ -167,7 +171,6 @@ private:
     void setLoopLength(int64_t frames);
     void recomputeLeds();
     void recomputeLatency();
-    void updateMetering();
     void applyLimiter(float* frame);
     int64_t writePositionFor(int64_t readPosition) const;
 
@@ -204,9 +207,11 @@ private:
 
     std::atomic<float> inputGain_[config::kNumChannels];
 
-    // Track cujo VU esta mostrando a entrada em vez da reproducao (-1 =
-    // nenhuma). Ver AudioTrack::setMeterInput.
-    int meteringTrack_ = -1;
+    // A captura em andamento ja escreveu alguma amostra? Sem isso a volta
+    // seria fechada no mesmo frame em que comecou (ver processFrame).
+    bool captureWritten_ = false;
+
+    std::atomic<int> bufferShortages_{0};
 
     float transportGain_ = 1.0f;
     float transportFadeStep_ = 1.0f;

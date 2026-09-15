@@ -23,9 +23,7 @@ void LooperEngine::prepare() {
         t.prepareBuffers(&layers_);
     }
     setAudioDeviceInfo(config::kPreferredSampleRate, 0);
-    recomputeLeds();
-    updateMetering();
-}
+    recomputeLeds();}
 
 void LooperEngine::setAudioDeviceInfo(double sampleRate, int64_t latencySamples) {
     if (sampleRate <= 0.0) {
@@ -151,28 +149,7 @@ void LooperEngine::handleButtonEvent(protocol::ButtonId id, protocol::Gesture ge
             break;
     }
 
-    recomputeLeds();
-    updateMetering();
-}
-
-void LooperEngine::updateMetering() {
-    // Em REC_MODE a track selecionada e a que vai receber a proxima gravacao:
-    // o VU dela mostra a ENTRADA roteada, para dar para conferir sinal e
-    // dosar o trim antes de apertar REC. Gravando, writeFrame ja alimenta o
-    // medidor com a entrada, entao nao ha o que trocar.
-    //
-    // O criterio bate de proposito com o da moldura vermelha de selecao: o
-    // medidor que muda de significado e exatamente o que esta destacado.
-    const int metering =
-        (mode_ == GlobalMode::REC_MODE && capturingTrack_ < 0) ? selectedTrack_ : -1;
-    if (metering == meteringTrack_) {
-        return;
-    }
-    meteringTrack_ = metering;
-    for (int i = 0; i < config::kNumTracks; ++i) {
-        tracks_[i].setMeterInput(i == meteringTrack_);
-    }
-}
+    recomputeLeds();}
 
 void LooperEngine::resumeTransport() {
     transportPlaying_ = true;
@@ -336,6 +313,9 @@ void LooperEngine::startCapture(int trackIndex) {
     }
     if (t.beginCapture(masterLoopLengthSamples_)) {
         capturingTrack_ = trackIndex;
+        captureWritten_ = false; // a primeira volta so fecha depois de gravar algo
+    } else {
+        bufferShortages_.fetch_add(1, std::memory_order_relaxed);
     }
     // Nao ha limite de camadas: beginCapture so falha se o LayerStore nao
     // tiver nenhum buffer pronto. Nesse caso simplesmente nao inicia - a
@@ -347,9 +327,7 @@ void LooperEngine::applyLoadedSession(int64_t lengthSamples, const float* const*
     clearAll();
 
     if (lengthSamples <= 0) {
-        recomputeLeds();
-        updateMetering();
-        return;
+        recomputeLeds();        return;
     }
 
     for (int i = 0; i < config::kNumTracks; ++i) {
@@ -365,9 +343,7 @@ void LooperEngine::applyLoadedSession(int64_t lengthSamples, const float* const*
     transportGain_ = 0.0f;
     pendingRewind_ = false;
 
-    recomputeLeds();
-    updateMetering();
-}
+    recomputeLeds();}
 
 void LooperEngine::clearAll() {
     for (auto& t : tracks_) {
@@ -426,14 +402,19 @@ void LooperEngine::processFrame(const float* input, float* output, float* perTra
     }
 
     if (transportPlaying_ && capturingTrack_ >= 0) {
-        tracks_[capturingTrack_].writeFrame(trimmed, writePositionFor(transportPosition_));
-    }
-
-    // VU da track selecionada mostrando a entrada. Roda mesmo com o
-    // transporte parado - conferir sinal e justamente algo que se faz antes
-    // de comecar.
-    if (meteringTrack_ >= 0) {
-        tracks_[meteringTrack_].meterInputFrame(trimmed);
+        const int64_t writePosition = writePositionFor(transportPosition_);
+        // CADA VOLTA DE OVERDUB E UMA CAMADA: quando a escrita passa pelo
+        // comeco do loop, a volta que terminou vira camada e a seguinte comeca
+        // numa camada nova, sem cortar o audio. Assim o desfazer tira uma volta
+        // por vez. (Nao vale para o passe que define o loop, que ainda nao tem
+        // volta nenhuma.)
+        if (writePosition == 0 && captureWritten_ && masterLoopLengthSamples_ > 0) {
+            if (!tracks_[capturingTrack_].splitCapture()) {
+                bufferShortages_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        tracks_[capturingTrack_].writeFrame(trimmed, writePosition);
+        captureWritten_ = true;
     }
 
     for (int i = 0; i < config::kNumTracks; ++i) {
@@ -514,9 +495,7 @@ void LooperEngine::processFrame(const float* input, float* output, float* perTra
             // apareciam no Windows Error Reporting.
             if (transportPosition_ >= tracks_[capturingTrack_].capacitySamples()) {
                 closeCapturingTrack();
-                recomputeLeds();
-                updateMetering();
-            }
+                recomputeLeds();            }
         } else {
             transportPosition_ = 0; // nada gravado e nada definido: fica em 0
         }
