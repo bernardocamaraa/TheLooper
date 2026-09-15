@@ -460,7 +460,15 @@ void AudioTrack::writeFrame(const float* inputFrame, int64_t position) {
         peak = std::max(peak, std::fabs(routed[ch]));
     }
     mixDirtyFrames_ = std::max(mixDirtyFrames_, position + 1);
-    updateLevel(peak);
+    framePeak_ = std::max(framePeak_, peak); // mixFrameInto junta com a reproducao
+}
+
+void AudioTrack::meterInputFrame(const float* inputFrame) {
+    float routed[config::kNumChannels];
+    routeInput(inputFrame, routed);
+    for (int ch = 0; ch < config::kNumChannels; ++ch) {
+        framePeak_ = std::max(framePeak_, std::fabs(routed[ch]));
+    }
 }
 
 void AudioTrack::mixFrameInto(float* outputFrame, int64_t position, float* soloOut, float meterScale) {
@@ -483,14 +491,11 @@ void AudioTrack::mixFrameInto(float* outputFrame, int64_t position, float* soloO
     const bool hasContent =
         (committedLayers() > 0) || (capture_ != nullptr && !captureDefinesMaster_);
 
-    // Gravando, quem alimenta o medidor e writeFrame() (a entrada que esta
-    // sendo escrita); a reproducao nao pode sobrescrever o nivel.
-    const bool meterFromPlayback = (state_ != TrackState::RECORDING);
-
+    // O nivel do frame e fechado aqui: o pico da entrada (framePeak_, se a
+    // track esta gravando ou selecionada) junto com o da reproducao.
     if (!hasContent || mix_ == nullptr || position < 0 || position >= capacitySamples_) {
-        if (meterFromPlayback) {
-            updateLevel(0.0f); // deixa o VU cair em vez de congelar
-        }
+        updateLevel(framePeak_); // sem reproducao: so a entrada, ou deixa o VU cair
+        framePeak_ = 0.0f;
         return;
     }
 
@@ -528,11 +533,12 @@ void AudioTrack::mixFrameInto(float* outputFrame, int64_t position, float* soloO
         }
         peak = std::max(peak, std::fabs(trackFrame[ch] * userGain));
     }
-    if (meterFromPlayback) {
-        // VU pos-fader, mas PRE-mute: a track mutada continua medida (a
-        // interface mostra em cinza) e so para com o transporte.
-        updateLevel(peak * meterScale);
-    }
+    // Reproducao pos-fader, mas PRE-mute: a track mutada continua medida (a
+    // interface mostra em cinza) e so para com o transporte (meterScale). A
+    // entrada nao depende do transporte: parado, a selecionada ainda mostra o
+    // sinal chegando.
+    updateLevel(std::max(framePeak_, peak * meterScale));
+    framePeak_ = 0.0f;
 }
 
 void AudioTrack::updateLevel(float peak) {

@@ -80,6 +80,18 @@ public:
         }
     }
 
+    // Entrada constante, sem gravar nada (para o teste do VU).
+    void runInput(int64_t frames, float value) {
+        for (int64_t i = 0; i < frames; ++i) {
+            if ((blockCounter_++ % 256) == 0) {
+                engine.serviceBlock();
+            }
+            const float in[config::kNumChannels] = {value, value};
+            float out[config::kNumChannels] = {};
+            engine.processFrame(in, out);
+        }
+    }
+
     // Deixa o tempo passar ate nenhum desfazer estar em andamento (as camadas
     // em disco precisam da thread do LayerStore).
     bool settle() {
@@ -334,6 +346,29 @@ void testOverdubLaps() {
            "desfazer gravando cancela so a volta atual, as 2 inteiras ficam");
 }
 
+void testSelectedMeter() {
+    std::printf("\n6) VU: a track selecionada mede o que toca E a entrada\n");
+    Harness h;
+    recordLayers(h, 2, 1500);          // track 1 tocando (sinal bem baixo), nada gravando
+    h.press(kButtonTrack2);            // seleciona a track 2, vazia
+    h.runInput(4800, 0.5f);            // entrada forte, sem gravar
+    expect(h.engine.trackLevel(1) > 0.4f, "selecionada e vazia: mostra a entrada");
+    expect(h.engine.trackLevel(0) < 0.01f, "nao selecionada: so o que toca (a entrada nao entra)");
+
+    h.press(kButtonTrack1);            // seleciona a track 1, que esta tocando
+    h.runInput(4800, 0.5f);
+    expect(h.engine.trackLevel(0) > 0.4f, "selecionada tocando: a entrada aparece junto");
+    h.runInput(4800 * 20, 0.0f);       // entrada em silencio (2 s)
+    expect(h.engine.trackLevel(0) > 0.0f, "selecionada sem entrada: continua mostrando o que toca");
+
+    h.press(protocol::kButtonPause);   // STOP
+    h.runInput(4800 * 20, 0.5f);
+    expect(h.engine.trackLevel(0) > 0.4f, "parado: a entrada da selecionada continua medida");
+    h.press(kButtonTrack2);
+    h.runInput(4800 * 20, 0.0f);
+    expect(h.engine.trackLevel(0) < 0.01f, "parado e sem selecao: o VU da track cai a zero");
+}
+
 } // namespace
 
 int main() {
@@ -343,6 +378,7 @@ int main() {
     testMultiTrackCancelClear();
     testLoadedSession();
     testOverdubLaps();
+    testSelectedMeter();
     std::printf("\n%s (%d falha%s)\n", failures == 0 ? "TUDO OK" : "HOUVE FALHAS", failures,
                 failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

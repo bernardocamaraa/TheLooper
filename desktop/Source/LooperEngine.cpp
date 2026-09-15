@@ -417,6 +417,13 @@ void LooperEngine::processFrame(const float* input, float* output, float* perTra
         captureWritten_ = true;
     }
 
+    // A track selecionada (REC_MODE) mede a entrada JUNTO com o que toca, mesmo
+    // com o transporte parado - conferir o sinal e algo que se faz antes de
+    // gravar. (Se ela ja esta gravando, writeFrame acabou de medir a entrada.)
+    if (mode_ == GlobalMode::REC_MODE && !(transportPlaying_ && selectedTrack_ == capturingTrack_)) {
+        tracks_[selectedTrack_].meterInputFrame(trimmed);
+    }
+
     for (int i = 0; i < config::kNumTracks; ++i) {
         float* solo = (perTrackOut != nullptr) ? perTrackOut + i * config::kNumChannels : nullptr;
         // transportGain_ no medidor: com o transporte parado o VU cai a zero,

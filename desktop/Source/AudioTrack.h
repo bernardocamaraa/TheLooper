@@ -123,10 +123,15 @@ public:
     // --- VU meter ---
     //
     // O medidor mostra o que a track REPRODUZ (pos-fader) - inclusive a
-    // selecionada e a MUTADA, que continua medida (a interface pinta de cinza)
-    // e so nao vai para a saida. So a track GRAVANDO mostra a entrada que esta
-    // sendo escrita. (Ja houve uma versao em que a track selecionada media a
-    // entrada; o usuario preferiu ver sempre o que toca.)
+    // MUTADA, que continua medida (a interface pinta de cinza) e so nao vai
+    // para a saida. Na track SELECIONADA (e na que grava) ele mostra o que toca
+    // E o que chega na entrada, o maior dos dois: da para conferir o sinal
+    // antes de gravar sem deixar de ver a reproducao. (Ja foi so a entrada, e
+    // depois so a reproducao; o usuario quer os dois juntos.)
+    //
+    // Chamado pela LooperEngine a cada frame, ANTES de mixFrameInto, que e
+    // quem fecha o nivel do frame.
+    void meterInputFrame(const float* inputFrame);
 
     // --- Mixer (chamado da thread da GUI; lido da thread de audio) ---
     //
@@ -235,6 +240,9 @@ private:
     std::atomic<int> publishedLayers_{0};
 
     std::atomic<float> level_{0.0f};
+    // Pico da entrada neste frame (gravando ou selecionada); mixFrameInto soma
+    // com o da reproducao e zera. So a thread de audio toca nisto.
+    float framePeak_ = 0.0f;
     float levelDecayPerSample_ = 0.0f;
 
     std::atomic<uint32_t> inputMask_{config::kDefaultInputMask};

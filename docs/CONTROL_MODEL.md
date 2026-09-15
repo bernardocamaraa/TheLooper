@@ -363,13 +363,15 @@ função de mixer). Os nomes das entradas vêm de `config::kInputChannelNames`.
 
 ### O que o VU de cada track mede
 
-- **Todas as tracks**: medem o que estão reproduzindo, pós-fader — inclusive a
-  track selecionada e as **mutadas** (que continuam medidas e só não vão para a
-  saída). Com o transporte parado (STOP) os medidores caem a zero.
-- **Track gravando**: mede a entrada roteada (é o que está sendo escrito).
+- **Todas as tracks**: medem o que estão reproduzindo, pós-fader — inclusive as
+  **mutadas** (que continuam medidas e só não vão para a saída). Com o
+  transporte parado (STOP) a parte da reprodução cai a zero.
+- **Track selecionada** (em `REC_MODE`) **e track gravando**: medem o que
+  reproduzem **e** a entrada roteada ao mesmo tempo (o maior dos dois). A
+  entrada continua medida com o transporte parado, para conferir o sinal antes
+  de gravar.
 
-(Até set/2026 a track selecionada em `REC_MODE` media a entrada em vez da
-reprodução; o usuário preferiu ver sempre o que toca, e isso saiu.)
+(Já foi só a entrada, e depois só a reprodução; o usuário quer os dois juntos.)
 - Tanto o fader de track quanto o trim de entrada têm **botão "100%"** para
   voltar ao ganho unitário; duplo clique no próprio controle faz o mesmo.
 
