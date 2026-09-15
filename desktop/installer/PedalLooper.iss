@@ -1,8 +1,8 @@
-; Instalador do Pedal Looper - gerado com Inno Setup.
+; Instalador do The Looper - gerado com Inno Setup.
 ; Compilar: ISCC.exe PedalLooper.iss (produz o .exe em installer\output).
-#define MyAppName "Pedal Looper"
-#define MyAppVersion "1.0"
-#define MyAppExeName "Pedal Looper.exe"
+#define MyAppName "The Looper"
+#define MyAppVersion "2.0"
+#define MyAppExeName "The Looper.exe"
 
 [Setup]
 AppId={{8F2E1A4C-5B3D-4E7A-9C1F-6D2B8A4E3F10}
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=output
-OutputBaseFilename=PedalLooperSetup
+OutputBaseFilename=TheLooperSetup
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -27,7 +27,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Name: "desktopicon"; Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Atalhos adicionais:"
 
 [Files]
-Source: "..\build\PedalLooper_artefacts\Release\Pedal Looper.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\build\PedalLooper_artefacts\Release\The Looper.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

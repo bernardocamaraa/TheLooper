@@ -161,25 +161,84 @@ void Settings::setSoftwareMonitoring(bool enabled) {
     }
 }
 
-bool Settings::audienceOnMeters() const {
+bool Settings::metersVisible() const {
     auto* props = file();
-    return props != nullptr ? props->getBoolValue("audienceOnMeters", false) : false;
+    return props != nullptr ? props->getBoolValue("metersVisible", true) : true;
 }
 
-void Settings::setAudienceOnMeters(bool audience) {
+void Settings::setMetersVisible(bool visible) {
     if (auto* props = file()) {
-        props->setValue("audienceOnMeters", audience);
+        props->setValue("metersVisible", visible);
     }
 }
 
-bool Settings::thirdScreenOpen() const {
+int Settings::themeMode() const {
     auto* props = file();
-    return props != nullptr ? props->getBoolValue("thirdScreenOpen", false) : false;
+    return juce::jlimit(0, 2, props != nullptr ? props->getIntValue("themeMode", 0) : 0);
 }
 
-void Settings::setThirdScreenOpen(bool open) {
+void Settings::setThemeMode(int mode) {
     if (auto* props = file()) {
-        props->setValue("thirdScreenOpen", open);
+        props->setValue("themeMode", mode);
+    }
+}
+
+int Settings::uiSizeLevel() const {
+    auto* props = file();
+    return juce::jlimit(0, 2, props != nullptr ? props->getIntValue("uiSizeLevel", 1) : 1);
+}
+
+void Settings::setUiSizeLevel(int level) {
+    if (auto* props = file()) {
+        props->setValue("uiSizeLevel", level);
+    }
+}
+
+int Settings::trackPreset() const {
+    auto* props = file();
+    return props != nullptr ? props->getIntValue("trackPreset", 0) : 0;
+}
+
+void Settings::setTrackPreset(int preset) {
+    if (auto* props = file()) {
+        props->setValue("trackPreset", preset);
+    }
+}
+
+juce::Colour Settings::trackColour(int track) const {
+    auto* props = file();
+    const juce::String stored =
+        props != nullptr ? props->getValue("track" + juce::String(track) + "Colour") : juce::String();
+    return stored.isEmpty() ? juce::Colours::transparentBlack : juce::Colour::fromString(stored);
+}
+
+void Settings::setTrackColour(int track, juce::Colour colour) {
+    if (auto* props = file()) {
+        props->setValue("track" + juce::String(track) + "Colour",
+                        colour.isTransparent() ? juce::String() : colour.toString());
+    }
+}
+
+juce::File Settings::setlistFile() const {
+    auto* props = file();
+    const juce::String stored = props != nullptr ? props->getValue("setlistFile") : juce::String();
+    return stored.isEmpty() ? juce::File() : juce::File(stored);
+}
+
+void Settings::setSetlistFile(const juce::File& setlist) {
+    if (auto* props = file()) {
+        props->setValue("setlistFile", setlist.getFullPathName());
+    }
+}
+
+int Settings::setlistIndex() const {
+    auto* props = file();
+    return props != nullptr ? props->getIntValue("setlistIndex", 0) : 0;
+}
+
+void Settings::setSetlistIndex(int index) {
+    if (auto* props = file()) {
+        props->setValue("setlistIndex", index);
     }
 }
 
@@ -213,14 +272,25 @@ void Settings::setWindowDisplay(const juce::String& windowId, int displayIndex) 
     }
 }
 
-int Settings::controlsPage() const {
+juce::String Settings::page() const {
     auto* props = file();
-    return props != nullptr ? props->getIntValue("controlsPage", 0) : 0;
+    return props != nullptr ? props->getValue("page", "tocar") : juce::String("tocar");
 }
 
-void Settings::setControlsPage(int page) {
+void Settings::setPage(const juce::String& page) {
     if (auto* props = file()) {
-        props->setValue("controlsPage", page);
+        props->setValue("page", page);
+    }
+}
+
+juce::String Settings::playView() const {
+    auto* props = file();
+    return props != nullptr ? props->getValue("playView", "cards") : juce::String("cards");
+}
+
+void Settings::setPlayView(const juce::String& view) {
+    if (auto* props = file()) {
+        props->setValue("playView", view);
     }
 }
 

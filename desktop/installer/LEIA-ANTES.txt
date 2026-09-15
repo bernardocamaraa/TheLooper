@@ -9,7 +9,7 @@ Obrigado por baixar o TheLooper! Algumas informações importantes:
   "Microsoft Visual C++ Redistributable" (x64). Baixe em:
   https://aka.ms/vs/17/release/vc_redist.x64.exe
 
-Depois de instalar os dois itens acima, o Pedal Looper deve abrir
+Depois de instalar os dois itens acima, o The Looper deve abrir
 normalmente. 
 
 Obrigado novamente por escolher o TheLooper! Esse projeto foi desenvolvido com 

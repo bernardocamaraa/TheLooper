@@ -52,18 +52,34 @@ public:
     bool softwareMonitoring() const;
     void setSoftwareMonitoring(bool enabled);
 
-    // Pagina aberta na janela de controles (0 = pedal, 1 = mesa, 2 = como
-    // funciona). Elas se revezam na janela - ver MainComponent::setPage.
-    int controlsPage() const;
-    void setControlsPage(int page);
+    // Aba aberta na janela principal ("tocar", "mixer", "sessoes", "setlist",
+    // "telas", "ajustes") e a vista da aba Tocar ("cards" ou "pedal").
+    juce::String page() const;
+    void setPage(const juce::String& page);
+    juce::String playView() const;
+    void setPlayView(const juce::String& view);
 
-    // Janela de VUs mostrando a tela de plateia no lugar dos medidores.
-    bool audienceOnMeters() const;
-    void setAudienceOnMeters(bool audience);
+    // Tela de performance (janela de medidores) aberta.
+    bool metersVisible() const;
+    void setMetersVisible(bool visible);
 
-    // Terceira janela (tela de plateia dedicada) aberta.
-    bool thirdScreenOpen() const;
-    void setThirdScreenOpen(bool open);
+    // Aparencia: tema (0 escuro, 1 claro, 2 sistema), tamanho da interface
+    // (0 compacto, 1 padrao, 2 grande), paleta inicial das tracks e a cor
+    // propria de cada track (transparente = a da paleta).
+    int themeMode() const;
+    void setThemeMode(int mode);
+    int uiSizeLevel() const;
+    void setUiSizeLevel(int level);
+    int trackPreset() const;
+    void setTrackPreset(int preset);
+    juce::Colour trackColour(int track) const;
+    void setTrackColour(int track, juce::Colour colour);
+
+    // Setlist aberto e a musica atual dele.
+    juce::File setlistFile() const;
+    void setSetlistFile(const juce::File& file);
+    int setlistIndex() const;
+    void setSetlistIndex(int index);
 
     // Pasta onde as gravacoes sao salvas.
     juce::File recordingFolder() const;

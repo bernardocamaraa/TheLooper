@@ -4,9 +4,6 @@
 
 namespace ui {
 
-namespace {
-constexpr float kThickness = 26.0f;
-} // namespace
 
 FrameMood moodFor(bool recMode, bool transportPlaying) {
     if (!transportPlaying) {
@@ -25,12 +22,14 @@ juce::Colour frameColour(FrameMood mood) {
 }
 
 float frameThickness() {
-    return kThickness;
+    // Fina e suave no visual novo: e luz na borda, nao moldura.
+    return juce::jlimit(6.0f, 22.0f, theme::pxf(12.0f));
 }
 
 void paintModeFrame(juce::Graphics& g, juce::Rectangle<int> bounds, FrameMood mood) {
     const juce::Colour base = frameColour(mood);
     const auto r = bounds.toFloat();
+    const float kThickness = frameThickness();
 
     // Quatro gradientes lineares, um por aresta, indo da cor para
     // transparente. A versao anterior empilhava contornos concentricos e o
@@ -40,7 +39,7 @@ void paintModeFrame(juce::Graphics& g, juce::Rectangle<int> bounds, FrameMood mo
     // A intensidade e baixa de proposito. Isto e luz de LED refletindo na
     // borda da caixa, nao uma moldura pintada - tem que dar para saber o modo
     // pelo canto do olho sem que a moldura dispute atencao com o conteudo.
-    const float alpha = (mood == FrameMood::Stopped) ? 0.22f : 0.40f;
+    const float alpha = (mood == FrameMood::Stopped) ? 0.12f : 0.34f;
     const juce::Colour edge = base.withAlpha(alpha);
     const juce::Colour fade = base.withAlpha(0.0f);
 

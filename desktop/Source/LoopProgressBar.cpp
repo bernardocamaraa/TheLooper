@@ -22,19 +22,11 @@ void LoopProgressBar::paint(juce::Graphics& g) {
     theme::paintGroove(g, bounds, radius);
 
     if (!loopDefined_) {
-        return; // estado "primordial": so o poco vazio, sem enfeite
+        return; // estado "primordial": so o trilho vazio
     }
 
-    const juce::Colour colour = ui::frameColour(mood_);
-    auto filled = bounds.reduced(1.0f);
-    filled.setWidth(juce::jmax(filled.getHeight(),
-                                static_cast<float>(filled.getWidth() * position_)));
-
-    g.setGradientFill(juce::ColourGradient(colour.withAlpha(0.35f), bounds.getX(), 0.0f, colour,
-                                            filled.getRight(), 0.0f, false));
+    // Cor do modo, chapada: vermelho gravando, verde tocando, cinza parado.
+    auto filled = bounds.withWidth(juce::jmax(bounds.getHeight(), static_cast<float>(bounds.getWidth() * position_)));
+    g.setColour(ui::frameColour(mood_));
     g.fillRoundedRectangle(filled, radius);
-
-    // Ponta viva: marca onde o loop esta agora, nao so quanto ja andou.
-    g.setColour(colour.brighter(0.3f));
-    g.fillRoundedRectangle(filled.removeFromRight(2.0f), 1.0f);
 }

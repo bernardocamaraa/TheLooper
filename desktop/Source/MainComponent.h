@@ -1,11 +1,10 @@
-// JANELA DE CONTROLES: tudo o que se ajusta fica aqui (trim das entradas,
-// canal de mesa de cada track, configuracao de audio), para poder ficar num
-// monitor enquanto os VUs ficam no outro - ver PerformanceComponent.
+// JANELA PRINCIPAL do The Looper: as seis abas (ver ui/AppShell e ui/Pages).
 //
-// Esta classe tambem e dona de toda a cadeia (LooperEngine ->
-// AudioEngine/ASIO, SerialLink, VirtualMicOutput), da Settings e da segunda
-// janela. Ver software/docs/CONTROL_MODEL.md para a FSM que a LooperEngine
-// implementa.
+// Esta classe e a dona de toda a cadeia (LooperEngine -> AudioEngine/ASIO,
+// SerialLink, VirtualMicOutput, Recorder), da Settings, do setlist e da tela de
+// performance (segundo monitor). As abas nao a conhecem: falam com ela pelo
+// AppContext, que ela implementa. Ver software/docs/CONTROL_MODEL.md para a
+// FSM que a LooperEngine implementa.
 #pragma once
 
 #include <array>
@@ -16,23 +15,22 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "AudioEngine.h"
-#include "LoopProgressBar.h"
+#include "LoopFile.h"
 #include "LooperEngine.h"
 #include "Messages.h"
-#include "ModeFrame.h"
-#include "AudienceView.h"
-#include "LoopFile.h"
-#include "PedalMap.h"
 #include "PedalLookAndFeel.h"
 #include "PerformanceComponent.h"
 #include "Recorder.h"
 #include "SerialLink.h"
 #include "Settings.h"
+#include "Setlist.h"
 #include "SpscQueue.h"
-#include "TrackControlStrip.h"
 #include "VirtualMicOutput.h"
+#include "ui/AppContext.h"
+#include "ui/AppShell.h"
 
 class MainComponent : public juce::Component,
+                      public AppContext,
                       private juce::Timer,
                       private juce::ChangeListener {
 public:
@@ -42,139 +40,95 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    // Usados pela janela principal (Main.cpp) para restaurar/salvar a propria
-    // posicao entre execucoes.
-    Settings& settings() { return settings_; }
+    // Usado pela janela (Main.cpp) para lembrar a posicao entre execucoes.
     void saveControlsWindowBounds(juce::Rectangle<int> bounds);
 
-    // Atalhos de teclado do pedal. Chamado pelo keyPressed() das DUAS janelas
-    // (ver Main.cpp e PerformanceWindow): a tecla sobe ate a janela quando o
-    // componente com foco nao a consome, e assim os atalhos funcionam
-    // independente de qual das duas esta em primeiro plano. Devolve true se
-    // consumiu a tecla.
-    bool handlePedalKey(const juce::KeyPress& key);
+    // Atalhos: os do pedal (PedalKeys.h), Ctrl+1..6 para as abas e N/P para o
+    // setlist. Chamado pelas duas janelas. Devolve true se consumiu a tecla.
+    bool handleKey(const juce::KeyPress& key);
 
-    // Enfileira um evento de botao vindo da INTERFACE (teclado ou barra de
-    // botoes). RT-safe do lado do consumidor - ver AudioEngine.
-    void sendPedalEvent(protocol::ButtonId button, protocol::Gesture gesture);
+    // --- AppContext --------------------------------------------------------
+    LooperEngine& engine() override { return looperEngine_; }
+    Settings& settings() override { return settings_; }
+    void sendPedalEvent(protocol::ButtonId button, protocol::Gesture gesture) override;
+
+    juce::String trackName(int track) override;
+    void setTrackName(int track, const juce::String& name) override;
+    void setTrackInputMask(int track, uint32_t mask) override;
+    void setTrackGain(int track, float gain) override;
+    void setInputGain(int channel, float gain) override;
+    void setTrackColour(int track, juce::Colour colour) override;
+    void confirmClearAll() override;
+
+    juce::File loopsFolder() override;
+    juce::String saveSession(const juce::File& file) override;
+    juce::String openSession(const juce::File& file) override;
+    juce::File stemsFolder() override;
+
+    bool recordingToDisk() override;
+    void setRecordingToDisk(bool on) override;
+    juce::File recordingFolder() override;
+    void chooseRecordingFolder() override;
+
+    bool metersVisible() override;
+    void setMetersVisible(bool visible) override;
+    int metersDisplay() override;
+    void setMetersDisplay(int index) override;
+    int controlsDisplay() override;
+
+    juce::AudioDeviceManager& deviceManager() override { return mainDeviceManager_; }
+    bool pedalConnected() override;
+    void reconnectPedal() override;
+    juce::String audioSummary() override;
+
+    void applyAppearance() override;
+
+    SetlistModel& setlist() override { return setlist_; }
+    void setlistStep(int direction) override;
+    void setlistGoTo(int index) override;
+    bool setlistArmed() override;
 
 private:
-    void timerCallback() override; // atualiza as DUAS janelas (~30fps)
-    // Salva a configuracao de audio sempre que ela muda (troca de driver,
-    // device, sample rate...), inclusive pelo dialogo de configuracao.
+    void timerCallback() override; // atualiza as janelas (~30 fps)
+    // Salva a configuracao de audio sempre que ela muda (driver, device, taxa).
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
 
     void setupAudioDevice();
     void startVirtualMic();
-    void setupInputStrips();
-    void setupTrackStrips();
+    void restoreMixer();
+    void loadAppearance();
+    void loadSetlist();
     void setupPerformanceWindow();
-    void setupAudioControls();
-    void showAudioSettings();
-    void showScreensMenu();
-    void showLoopMenu();
-    void saveLoop();
-    void openLoop();
-    juce::File loopsFolder() const;
-    void setMetersVisible(bool visible);
-    void setAudienceOnMeters(bool audience);
-    void setThirdScreenOpen(bool open);
-    void setupAudienceWindow();
-    // Reposiciona uma janela de apresentacao no monitor salvo para ela.
-    void applyWindowDisplay(PerformanceWindow* window, const juce::String& windowId, int fallbackIndex);
-
-    // As tres paginas da janela de controles. Elas se revezam em vez de
-    // dividir a janela: cada uma sozinha fica com tudo, que e a unica forma de
-    // o pedal e a mesa terem tamanho de dedo num monitor touch.
-    enum class Page { Pedal, Mixer };
-    void setPage(Page page);
-
-    // Re-fixa as fontes que sao definidas no construtor, para elas
-    // acompanharem o tamanho da janela - ver o comentario em resized().
-    void applyUiScale(float scale);
-
-    // Um trim por entrada fisica (Violao, Voz...).
-    struct InputStrip {
-        juce::Label name;
-        juce::Slider gain;
-        juce::TextButton reset;
-    };
+    void showMetersWindow();
+    void applySong(int index);
 
     // Ordem de declaracao = ordem de construcao/destruicao: a LookAndFeel
-    // precisa sobreviver a todo componente que a usa, entao vem primeiro (e
-    // e desinstalada no destrutor, antes de qualquer um deles morrer).
+    // precisa sobreviver a todo componente que a usa, entao vem primeiro.
     PedalLookAndFeel lookAndFeel_;
-
-    // A LooperEngine precisa sobreviver ao AudioEngine, etc. A Settings vem
-    // cedo porque e lida durante a construcao de quase tudo o mais.
     Settings settings_;
-
     LooperEngine looperEngine_;
 
-    SpscQueue<ButtonEventMsg, 64> buttonEventQueue_;  // produtor: thread do SerialLink
-    SpscQueue<ButtonEventMsg, 64> uiButtonQueue_;     // produtor: thread da GUI
+    SpscQueue<ButtonEventMsg, 64> buttonEventQueue_; // produtor: thread do SerialLink
+    SpscQueue<ButtonEventMsg, 64> uiButtonQueue_;    // produtor: thread da GUI
     SpscQueue<LedCommand, 64> ledCommandQueue_;
     SpscQueue<AudioFrame, 8192> micRingQueue_;
 
-    Recorder recorder_; // declarado ANTES do AudioEngine, que guarda uma referencia
+    Recorder recorder_; // antes do AudioEngine, que guarda uma referencia
     AudioEngine audioEngine_;
-    juce::AudioDeviceManager mainDeviceManager_; // device ASIO (interface real)
+    juce::AudioDeviceManager mainDeviceManager_;
     VirtualMicOutput virtualMic_;
-    double virtualMicSampleRate_ = 0.0; // taxa com que o cabo virtual esta aberto
+    double virtualMicSampleRate_ = 0.0;
     SerialLink serialLink_;
 
     std::array<juce::String, config::kNumTracks> trackNames_;
-
-    Page page_ = Page::Pedal;
-    ui::FrameMood mood_ = ui::FrameMood::Stopped;
-    float uiScale_ = 0.0f; // ultima escala aplicada (0 = fontes ainda nao ajustadas)
-    LoopProgressBar progressBar_;
-
-    juce::TextButton pageToggle_;
-    juce::TextButton audioSettingsButton_;
-    // Um botao so para as janelas de apresentacao: mostrar/esconder, escolher
-    // o que cada uma mostra e em qual monitor. Tres botoes separados comiam a
-    // largura do cabecalho no celular - e um menu e alvo maior para o dedo do
-    // que tres botoes espremidos.
-    juce::TextButton screensButton_;
-    juce::TextButton loopFileButton_;   // salvar/abrir a musica inteira (.loop)
-    // O seletor de arquivos e assincrono: precisa sobreviver a chamada que o
-    // abriu, senao a janela some antes de o usuario escolher.
-    std::unique_ptr<juce::FileChooser> fileChooser_;
-    bool metersVisible_ = true;
-    bool audienceOnMeters_ = false;
-    bool thirdScreenOpen_ = false;
-    juce::Label statusLabel_;
-    PedalMap pedalMap_;
-
-    // Ajustes que antes eram constantes de compilacao.
-    juce::Label latencyCaption_;
-    juce::Slider latencyTrimSlider_;
-    juce::TextButton monitorToggle_{"Monitorar entrada"};
-    juce::TextButton reconnectButton_{"Reconectar pedal"};
-    juce::TextButton recordButton_;
-    juce::TextButton openFolderButton_{"Abrir pasta"};
-    juce::Label comPortCaption_;
-    juce::TextEditor comPortEditor_;
-
-    // Reguas de secao com a legenda apoiada nelas (serigrafia de painel).
-    // Sao pintadas, nao componentes - nao ha nada para interagir com elas.
-    juce::Rectangle<int> pedalRule_;
-    juce::Rectangle<int> audioRule_;
-    juce::Rectangle<int> inputsRule_;
-    juce::Rectangle<int> channelsRule_;
-
-    std::array<std::unique_ptr<InputStrip>, config::kNumChannels> inputStrips_;
-    std::array<std::unique_ptr<TrackControlStrip>, config::kNumTracks> trackStrips_;
+    SetlistModel setlist_;
+    juce::uint32 setlistArmedAt_ = 0;
 
     std::unique_ptr<PerformanceComponent> performanceComponent_;
     std::unique_ptr<PerformanceWindow> performanceWindow_;
 
-    // Terceira janela, opcional: a tela de plateia num monitor so dela, para
-    // os medidores continuarem visiveis para quem toca.
-    std::unique_ptr<AudienceView> audienceScreen_;
-    std::unique_ptr<PerformanceWindow> audienceWindow_;
-
-    std::unique_ptr<juce::DialogWindow> audioSettingsWindow_;
+    // Por ultimo: as abas apontam para quase tudo acima (inclusive o device
+    // manager, pelo seletor de audio embutido), entao morrem primeiro.
+    std::unique_ptr<AppShell> shell_;
     juce::TooltipWindow tooltipWindow_;
 };

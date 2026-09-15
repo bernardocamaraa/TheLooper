@@ -52,6 +52,18 @@ struct LoopSession {
     bool hasAudio() const;
 };
 
+// O que da para saber de um .loop lendo so o cabecalho (sem o audio): e o
+// que a biblioteca de sessoes mostra, rapido mesmo com dezenas de arquivos.
+struct LoopInfo {
+    double sampleRate = 0.0;
+    int64_t lengthSamples = 0;
+    std::array<juce::String, config::kNumTracks> names;
+    std::array<bool, config::kNumTracks> hasAudio{};
+
+    double seconds() const { return sampleRate > 0.0 ? static_cast<double>(lengthSamples) / sampleRate : 0.0; }
+    int tracksWithAudio() const;
+};
+
 namespace loopfile {
 
 // Extensao e filtro usados pelo seletor de arquivos.
@@ -68,5 +80,14 @@ juce::String load(const juce::File& file, LoopSession& session);
 // uma musica gravada a 48 kHz tocaria mais lenta (e mais grave) num device
 // aberto a 44,1 - e o device nem sempre abre na mesma taxa da vez anterior.
 void resampleTo(LoopSession& session, double targetSampleRate);
+
+// So o cabecalho (vazio = ok).
+juce::String readInfo(const juce::File& file, LoopInfo& info);
+
+// Um WAV 24 bits por track com audio ("<base> - 1 Nome.wav") e o mix
+// ("<base> - Mix.wav": as tracks nao mutadas, com o volume de cada uma, em
+// mono como a saida do app). Vazio = ok.
+juce::String exportStems(const LoopSession& session, const juce::File& folder, const juce::String& baseName,
+                         juce::Array<juce::File>* written = nullptr);
 
 } // namespace loopfile

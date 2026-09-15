@@ -79,31 +79,26 @@ void VuMeter::timerCallback() {
 
 void VuMeter::paint(juce::Graphics& g) {
     auto bounds = getLocalBounds().toFloat();
-    theme::paintGroove(g, bounds, 3.0f);
-
-    auto area = bounds.reduced(3.0f);
-    if (area.getHeight() < 4.0f || area.getWidth() < 4.0f) {
-        return;
-    }
+    const float radius = juce::jlimit(2.0f, 10.0f, juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.14f);
+    theme::paintGroove(g, bounds, radius);
 
     if (style_ == Style::Bar) {
-        paintBar(g, area);
-    } else {
+        paintBar(g, bounds);
+        return;
+    }
+    auto area = bounds.reduced(3.0f);
+    if (area.getHeight() >= 4.0f && area.getWidth() >= 4.0f) {
         paintSegments(g, area);
     }
 }
 
 void VuMeter::paintBar(juce::Graphics& g, juce::Rectangle<float> area) {
-    const float radius = 2.0f;
-    const juce::Colour colour = muted_ ? theme::inkDim : theme::ledGreen;
-
-    // Leito apagado bem discreto. A area aqui e grande (medidor de largura
-    // cheia), e o mesmo alpha que funciona na coluna estreita do mixer vira
-    // um retangulo esverdeado grande demais parado. O que impede o buraco
-    // preto de antes e principalmente o rebaixo (paintGroove); o leito so
-    // sugere que ali e uma coluna de nivel.
-    g.setColour(colour.withAlpha(0.09f));
-    g.fillRoundedRectangle(area, radius);
+    // Barra CONTINUA e VERDE, sem zonas nem segmentos (pedido do usuario: e o
+    // medidor da tela de performance, a parte principal dela). Mutada, a barra
+    // fica cinza mas continua mexendo com o audio - so para com o STOP.
+    const auto& p = theme::palette();
+    const juce::Colour colour = muted_ ? p.t3 : p.play;
+    const float radius = juce::jlimit(2.0f, 10.0f, juce::jmin(area.getWidth(), area.getHeight()) * 0.14f);
 
     if (level_ > 0.0f) {
         auto filled = area.withTop(area.getBottom() - area.getHeight() * level_);
@@ -111,13 +106,12 @@ void VuMeter::paintBar(juce::Graphics& g, juce::Rectangle<float> area) {
         g.fillRoundedRectangle(filled, radius);
     }
 
-    if (peak_ > 0.0f && !muted_) {
-        // Retencao de pico: uma risca fina no ponto mais alto recente, na cor
-        // da zona em que ele caiu. E o unico aviso de que o sinal esta perto
-        // do teto - a barra sozinha nao diz isso.
+    if (peak_ > 0.0f) {
+        // Retencao de pico: o traco fino que fica parado 1,1 s no ponto mais
+        // alto recente.
         const float y = area.getBottom() - area.getHeight() * peak_;
-        g.setColour(segmentColour(peak_));
-        g.fillRect(area.getX(), juce::jmax(area.getY(), y - 1.0f), area.getWidth(), 2.0f);
+        g.setColour(colour.withAlpha(0.9f));
+        g.fillRect(area.getX(), juce::jmax(area.getY(), y - 1.5f), area.getWidth(), 3.0f);
     }
 }
 
@@ -143,9 +137,10 @@ void VuMeter::paintSegments(juce::Graphics& g, juce::Rectangle<float> area) {
         const float top = ladder.getBottom() - static_cast<float>(i + 1) * step;
         juce::Rectangle<float> seg(ladder.getX(), top, ladder.getWidth(), segHeight);
 
+        // Mutada: continua acendendo com o audio, em cinza.
         const juce::Colour zone = muted_ ? theme::inkFaint : segmentColour(positionFromBottom);
-        const bool lit = (i < litCount) && !muted_;
-        const bool isPeak = (i == peakIndex) && (peakIndex >= litCount) && !muted_;
+        const bool lit = (i < litCount);
+        const bool isPeak = (i == peakIndex) && (peakIndex >= litCount);
 
         if (lit) {
             g.setColour(zone);

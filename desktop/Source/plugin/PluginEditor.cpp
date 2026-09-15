@@ -187,6 +187,7 @@ void PedalLooperEditor::setupInputStrips() {
 void PedalLooperEditor::setupTrackStrips() {
     for (int i = 0; i < config::kNumTracks; ++i) {
         auto strip = std::make_unique<TrackControlStrip>();
+        strip->setTrackIndex(i);
         strip->setLevelSource([this, i] { return processor_.engine().trackLevel(i); });
 
         // Os valores ja vivem no processor (que os restaurou do projeto do FL).

@@ -1,13 +1,9 @@
-// Painel de uma track na JANELA DE VUs (segundo monitor): nome, estado,
-// numero de camadas e o medidor de nivel, em tamanho grande o suficiente para
-// ser lido de longe tocando.
-//
-// Sem nenhum controle - tudo o que se ajusta fica na janela de controles.
+// Coluna de uma track na TELA DE PERFORMANCE (segundo monitor): nome com o
+// ponto de cor, estado, camadas e o medidor grande - a barra continua verde,
+// que e a parte principal da tela. Nenhum controle.
 #pragma once
 
 #include <functional>
-
-#include <cmath>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -18,12 +14,11 @@ class TrackMeterPanel : public juce::Component {
 public:
     TrackMeterPanel();
 
+    void setTrackIndex(int index);
     void setLevelSource(std::function<float()> levelProvider) { vuMeter_.setLevelSource(std::move(levelProvider)); }
 
-    // inputMask e mostrado como texto: na janela de performance, saber qual
-    // entrada alimenta cada track e o que explica o que o VU esta medindo.
-    // Na track selecionada o rotulo da entrada aparece destacado (o medidor
-    // mostra sempre o que a track toca).
+    // Na track selecionada (REC) o painel ganha o contorno vermelho e o rotulo
+    // da entrada aparece destacado (o medidor mostra o que toca e a entrada).
     void update(const juce::String& name, TrackState state, bool selectedInRecMode, int layerCount,
                 uint32_t inputMask);
 
@@ -31,11 +26,14 @@ public:
     void paint(juce::Graphics& g) override;
 
 private:
-    bool selectedInRecMode_ = false;
+    float localScale() const;
+    juce::Rectangle<float> headerArea() const;
 
-    juce::Label nameLabel_;
-    juce::Label stateLabel_;
-    juce::Label inputLabel_;
-    float scale_ = 0.0f; // ultima escala aplicada as fontes (ver resized)
+    int index_ = 0;
+    juce::String name_;
+    TrackState state_ = TrackState::EMPTY;
+    bool selected_ = false;
+    int layers_ = 0;
+    uint32_t inputMask_ = 0;
     VuMeter vuMeter_;
 };

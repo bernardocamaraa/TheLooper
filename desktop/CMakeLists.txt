@@ -51,6 +51,8 @@ set(kPedalCoreSources
     Source/LoopFile.cpp
     Source/SerialLink.cpp
     Source/PedalLookAndFeel.cpp
+    Source/ui/Icons.cpp
+    Source/ui/Widgets.cpp
     Source/PedalMap.cpp
     Source/ModeFrame.cpp
     Source/LoopProgressBar.cpp
@@ -87,10 +89,20 @@ endfunction()
 # --------------------------------------------------------------------------
 # Target 1: app standalone
 # --------------------------------------------------------------------------
+# Logo e icone (Assets/, extraidos de thelooper.jpg) embutidos no executavel.
+juce_add_binary_data(TheLooperAssets SOURCES
+    Assets/logo-mark.png
+    Assets/logo-wordmark.png
+    Assets/logo-full.png
+    Assets/app-icon.png
+)
+
 juce_add_gui_app(PedalLooper
-    PRODUCT_NAME "Pedal Looper"
+    PRODUCT_NAME "The Looper"
     COMPANY_NAME "PEDAL"
-    VERSION "1.0.0"
+    VERSION "2.0.0"
+    ICON_BIG Assets/app-icon.png
+    ICON_SMALL Assets/app-icon.png
 )
 
 target_sources(PedalLooper PRIVATE
@@ -98,14 +110,23 @@ target_sources(PedalLooper PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/PerformanceComponent.cpp
-    Source/AudienceView.cpp
     Source/AudioEngine.cpp
     Source/VirtualMicOutput.cpp
     Source/Recorder.cpp
     Source/Settings.cpp
+    Source/Setlist.cpp
+    Source/ui/Brand.cpp
+    Source/ui/AppShell.cpp
+    Source/ui/pages/PlayPage.cpp
+    Source/ui/pages/MixerPage.cpp
+    Source/ui/pages/SessionsPage.cpp
+    Source/ui/pages/SetlistPage.cpp
+    Source/ui/pages/ScreensPage.cpp
+    Source/ui/pages/SettingsPage.cpp
 )
 
 pedal_configure_target(PedalLooper)
+target_link_libraries(PedalLooper PRIVATE TheLooperAssets)
 
 if(ASIO_SDK_PATH)
     target_include_directories(PedalLooper PRIVATE

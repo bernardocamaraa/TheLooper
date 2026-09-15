@@ -1,6 +1,7 @@
 #include "LoopFile.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 
 #include "UiText.h"
 
@@ -207,4 +208,133 @@ void resampleTo(LoopSession& session, double targetSampleRate) {
     session.sampleRate = targetSampleRate;
 }
 
+juce::String readInfo(const juce::File& file, LoopInfo& info) {
+    juce::FileInputStream in(file);
+    if (!in.openedOk()) {
+        return ui::utf8("Não consegui abrir ") + file.getFullPathName();
+    }
+    char magic[kMagicLength + 1] = {};
+    if (in.read(magic, kMagicLength) != kMagicLength || juce::String(magic) != kMagic) {
+        return ui::utf8("Não é um .loop do The Looper.");
+    }
+    const int metaLength = in.readInt();
+    if (metaLength <= 0 || static_cast<uint32_t>(metaLength) > kMaxMetaLength) {
+        return ui::utf8("Cabeçalho inválido.");
+    }
+    juce::MemoryBlock metaBlock;
+    if (in.readIntoMemoryBlock(metaBlock, metaLength) != metaLength) {
+        return ui::utf8("Cabeçalho incompleto.");
+    }
+    auto meta = juce::parseXML(metaBlock.toString());
+    if (meta == nullptr || !meta->hasTagName("PedalLoop")) {
+        return ui::utf8("Cabeçalho ilegível.");
+    }
+
+    info = LoopInfo{};
+    info.sampleRate = meta->getDoubleAttribute("sampleRate", config::kPreferredSampleRate);
+    info.lengthSamples = static_cast<int64_t>(meta->getIntAttribute("lengthSamples", 0));
+    for (auto* node : meta->getChildWithTagNameIterator("Track")) {
+        const int index = node->getIntAttribute("index", -1);
+        if (index < 0 || index >= config::kNumTracks) {
+            continue;
+        }
+        info.names[static_cast<size_t>(index)] = node->getStringAttribute("name");
+        info.hasAudio[static_cast<size_t>(index)] = node->getBoolAttribute("hasAudio", false);
+    }
+    return {};
+}
+
+namespace {
+juce::String writeWav(const juce::File& file, const std::vector<float>& interleaved, int64_t frames,
+                      double sampleRate) {
+    file.deleteFile();
+    auto fileStream = std::make_unique<juce::FileOutputStream>(file);
+    if (!fileStream->openedOk()) {
+        return ui::utf8("Não consegui escrever ") + file.getFullPathName();
+    }
+    std::unique_ptr<juce::OutputStream> stream = std::move(fileStream);
+    juce::WavAudioFormat wav;
+    auto writer = wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                  .withSampleRate(sampleRate)
+                                                  .withNumChannels(config::kNumChannels)
+                                                  .withBitsPerSample(24));
+    if (writer == nullptr) {
+        return ui::utf8("Não consegui criar o WAV ") + file.getFileName();
+    }
+    const int count = static_cast<int>(frames);
+    juce::AudioBuffer<float> buffer(config::kNumChannels, count);
+    for (int ch = 0; ch < config::kNumChannels; ++ch) {
+        float* dest = buffer.getWritePointer(ch);
+        for (int i = 0; i < count; ++i) {
+            dest[i] = juce::jlimit(-1.0f, 1.0f, interleaved[static_cast<size_t>(i) * config::kNumChannels + ch]);
+        }
+    }
+    if (!writer->writeFromAudioSampleBuffer(buffer, 0, count)) {
+        return ui::utf8("Erro ao gravar ") + file.getFileName();
+    }
+    return {};
+}
+} // namespace
+
+juce::String exportStems(const LoopSession& session, const juce::File& folder, const juce::String& baseName,
+                         juce::Array<juce::File>* written) {
+    if (!session.hasAudio() || session.lengthSamples <= 0) {
+        return ui::utf8("Esta sessão não tem áudio para exportar.");
+    }
+    if (!folder.createDirectory()) {
+        return ui::utf8("Não consegui criar a pasta ") + folder.getFullPathName();
+    }
+
+    const size_t total = static_cast<size_t>(session.lengthSamples) * config::kNumChannels;
+    std::vector<float> mix(total, 0.0f);
+
+    for (int t = 0; t < config::kNumTracks; ++t) {
+        const auto& track = session.tracks[static_cast<size_t>(t)];
+        if (track.audio.empty()) {
+            continue;
+        }
+        const juce::String name = track.name.isNotEmpty() ? track.name : "Track " + juce::String(t + 1);
+        const juce::File file = folder.getChildFile(
+            juce::File::createLegalFileName(baseName + " - " + juce::String(t + 1) + " " + name) + ".wav");
+        const juce::String error = writeWav(file, track.audio, session.lengthSamples, session.sampleRate);
+        if (error.isNotEmpty()) {
+            return error;
+        }
+        if (written != nullptr) {
+            written->add(file);
+        }
+        if (!track.muted) {
+            const float gain = track.gain * config::kTrackGain;
+            for (size_t i = 0; i < total && i < track.audio.size(); ++i) {
+                mix[i] += track.audio[i] * gain;
+            }
+        }
+    }
+
+    // Mono, como a saida do app (ver config::kMonoOutput).
+    for (size_t i = 0; i + 1 < total; i += config::kNumChannels) {
+        float sum = 0.0f;
+        for (int ch = 0; ch < config::kNumChannels; ++ch) {
+            sum += mix[i + static_cast<size_t>(ch)];
+        }
+        for (int ch = 0; ch < config::kNumChannels; ++ch) {
+            mix[i + static_cast<size_t>(ch)] = sum / static_cast<float>(config::kNumChannels);
+        }
+    }
+    const juce::File mixFile = folder.getChildFile(juce::File::createLegalFileName(baseName + " - Mix") + ".wav");
+    const juce::String error = writeWav(mixFile, mix, session.lengthSamples, session.sampleRate);
+    if (error.isEmpty() && written != nullptr) {
+        written->add(mixFile);
+    }
+    return error;
+}
+
 } // namespace loopfile
+
+int LoopInfo::tracksWithAudio() const {
+    int count = 0;
+    for (bool has : hasAudio) {
+        count += has ? 1 : 0;
+    }
+    return count;
+}

@@ -2,40 +2,35 @@
 
 #include "PedalLookAndFeel.h"
 
-PerformanceComponent::PerformanceComponent(LooperEngine& engine,
-                                            std::function<juce::String(int)> nameProvider)
-    : engine_(engine), nameProvider_(std::move(nameProvider)) {
+namespace {
+juce::String clockText(double seconds) {
+    const int minutes = static_cast<int>(seconds / 60.0);
+    const double rest = seconds - minutes * 60.0;
+    return juce::String(minutes) + ":" + juce::String(rest, 1).paddedLeft('0', 4);
+}
+} // namespace
+
+PerformanceComponent::PerformanceComponent(LooperEngine& engine, std::function<juce::String(int)> nameProvider,
+                                           std::function<juce::String()> songProvider)
+    : engine_(engine), nameProvider_(std::move(nameProvider)), songProvider_(std::move(songProvider)) {
+    addAndMakeVisible(progressBar_);
     for (int i = 0; i < config::kNumTracks; ++i) {
         auto meter = std::make_unique<TrackMeterPanel>();
+        meter->setTrackIndex(i);
         meter->setLevelSource([this, i] { return engine_.trackLevel(i); });
         addAndMakeVisible(*meter);
         meters_[static_cast<size_t>(i)] = std::move(meter);
     }
-
-    audience_ = std::make_unique<AudienceView>(engine_, nameProvider_);
-    addChildComponent(*audience_); // so aparece quando setAudienceView(true)
 }
 
-void PerformanceComponent::setAudienceView(bool audience) {
-    if (audience == audienceView_) {
-        return;
-    }
-    audienceView_ = audience;
-
-    audience_->setVisible(audience);
+void PerformanceComponent::refreshColours() {
     for (auto& meter : meters_) {
-        meter->setVisible(!audience);
+        meter->repaint();
     }
-    resized();
     repaint();
 }
 
 void PerformanceComponent::refresh() {
-    if (audienceView_) {
-        audience_->refresh();
-        return;
-    }
-
     const bool recMode = (engine_.mode() == GlobalMode::REC_MODE);
     const bool playing = engine_.transportPlaying();
     const int selected = engine_.selectedTrack();
@@ -48,35 +43,50 @@ void PerformanceComponent::refresh() {
         mood_ = mood;
         repaint();
     }
+    progressBar_.setProgress(progress, defined, mood);
+
+    const juce::String clock = defined ? clockText(engine_.loopPositionSeconds()) : juce::String("--");
+    const juce::String length = defined ? "/ " + juce::String(engine_.loopLengthSeconds(), 1) + " s" : juce::String();
+    if (clock != clock_ || length != length_) {
+        clock_ = clock;
+        length_ = length;
+        repaint(clockArea_);
+    }
+    const juce::String song = songProvider_ ? songProvider_() : juce::String();
+    if (song != song_) {
+        song_ = song;
+        repaint(songArea_);
+    }
+
     if (!juce::approximatelyEqual(progress, progress_) || defined != loopDefined_) {
         progress_ = progress;
         loopDefined_ = defined;
-        // So a faixa dos medidores precisa ser repintada para o playhead
-        // andar - repintar a janela inteira a 30 Hz seria desperdicio.
-        repaint(meterRow_);
+        repaint(meterRow_); // so a faixa das colunas, para o playhead andar
     }
 
     for (int i = 0; i < config::kNumTracks; ++i) {
         meters_[static_cast<size_t>(i)]->update(nameProvider_ ? nameProvider_(i) : juce::String(),
-                                                 engine_.trackState(i), recMode && (i == selected),
-                                                 engine_.trackLayers(i), engine_.trackInputMask(i));
+                                                engine_.trackState(i), recMode && (i == selected),
+                                                engine_.trackLayers(i), engine_.trackInputMask(i));
     }
 }
 
 void PerformanceComponent::resized() {
-    // A tela de plateia pinta a propria moldura de modo, entao ela recebe a
-    // janela inteira, sem a margem que os medidores precisam.
-    audience_->setBounds(getLocalBounds());
-    if (audienceView_) {
-        return;
-    }
+    const float h = static_cast<float>(getHeight());
+    const int margin = juce::roundToInt(ui::frameThickness() + h * 0.02f);
+    auto area = getLocalBounds().reduced(margin);
 
-    // Margem para o conteudo nao encostar na moldura de modo.
-    auto area = getLocalBounds().reduced(static_cast<int>(ui::frameThickness()));
+    // Barra de cima: relogio | progresso | musica.
+    auto top = area.removeFromTop(juce::roundToInt(h * 0.1f));
+    clockArea_ = top.removeFromLeft(juce::roundToInt(static_cast<float>(top.getWidth()) * 0.3f));
+    songArea_ = top.removeFromRight(juce::roundToInt(static_cast<float>(top.getWidth()) * 0.3f));
+    progressBar_.setBounds(top.reduced(juce::roundToInt(h * 0.012f), 0)
+                               .withSizeKeepingCentre(top.getWidth() - juce::roundToInt(h * 0.024f),
+                                                      juce::jmax(6, juce::roundToInt(h * 0.012f))));
+    area.removeFromTop(juce::roundToInt(h * 0.025f));
 
     meterRow_ = area;
-
-    const int gap = 14;
+    const int gap = juce::roundToInt(h * 0.015f);
     const int panelWidth = (area.getWidth() - gap * (config::kNumTracks - 1)) / config::kNumTracks;
     for (int i = 0; i < config::kNumTracks; ++i) {
         meters_[static_cast<size_t>(i)]->setBounds(area.removeFromLeft(panelWidth));
@@ -85,66 +95,39 @@ void PerformanceComponent::resized() {
 }
 
 void PerformanceComponent::paint(juce::Graphics& g) {
-    g.fillAll(theme::enclosure);
+    const auto& p = theme::palette();
+    g.fillAll(p.bg);
     ui::paintModeFrame(g, getLocalBounds(), mood_);
+
+    const float h = static_cast<float>(clockArea_.getHeight());
+    g.setColour(p.t1);
+    g.setFont(theme::numbers(h * 0.78f, true));
+    g.drawText(clock_, clockArea_, juce::Justification::centredLeft, false);
+    const float clockWidth = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), clock_);
+    g.setColour(p.t3);
+    g.setFont(theme::numbers(h * 0.34f));
+    g.drawText(length_, clockArea_.withTrimmedLeft(juce::roundToInt(clockWidth + h * 0.2f)),
+               juce::Justification::centredLeft, false);
+
+    g.setColour(p.t2);
+    g.setFont(theme::text(h * 0.32f, theme::Weight::Semibold));
+    g.drawFittedText(song_, songArea_, juce::Justification::centredRight, 1, 0.8f);
 }
 
 void PerformanceComponent::paintOverChildren(juce::Graphics& g) {
-    // Na tela de plateia quem marca a posicao do loop e o ponteiro do circulo -
-    // o playhead dos medidores passaria por cima dela.
-    if (!loopDefined_ || audienceView_) {
+    // O playhead: UMA linha atravessando as quatro colunas - o mesmo loop
+    // passando por todas as tracks, que e a invariante central do looper.
+    if (!loopDefined_) {
         return;
     }
-
-    // ------------------------------------------------------------------
-    // O playhead.
-    //
-    // A invariante central deste looper e que as 4 tracks compartilham UM
-    // comprimento de loop (ver docs/CONTROL_MODEL.md). Quatro barras de
-    // progresso separadas nao diriam isso - diriam o contrario. Uma linha so,
-    // atravessando a regua inteira da esquerda para a direita e voltando ao
-    // reiniciar, e a propria informacao: e o mesmo loop passando pelas
-    // quatro.
-    //
-    // Precisa ser pintada aqui (paintOverChildren) e nao em paint(): os
-    // painies das tracks sao filhos e se desenham por cima do pai, entao uma
-    // linha pintada antes deles ficaria escondida.
-    // ------------------------------------------------------------------
     const auto row = meterRow_.toFloat();
     const float x = row.getX() + static_cast<float>(progress_) * row.getWidth();
-    const juce::Colour colour = ui::frameColour(mood_);
-
-    // Rastro curto atras da linha, para o sentido do movimento ficar obvio
-    // mesmo num relance.
-    const float trail = 46.0f;
-    if (x > row.getX()) {
-        auto trailArea = juce::Rectangle<float>(juce::jmax(row.getX(), x - trail), row.getY(),
-                                                 juce::jmin(trail, x - row.getX()), row.getHeight());
-        g.setGradientFill(juce::ColourGradient(colour.withAlpha(0.0f), trailArea.getX(), 0.0f,
-                                                colour.withAlpha(0.16f), x, 0.0f, false));
-        g.fillRect(trailArea);
-    }
-
-    g.setColour(colour.withAlpha(0.85f));
-    g.fillRect(x - 0.75f, row.getY(), 1.5f, row.getHeight());
-
-    // Cabeca da linha nas duas pontas: e o que a faz parecer um cursor de
-    // transporte, e nao uma divisoria entre painies.
-    juce::Path head;
-    const float s = 5.0f;
-    head.addTriangle(x - s, row.getY(), x + s, row.getY(), x, row.getY() + s * 1.4f);
-    head.addTriangle(x - s, row.getBottom(), x + s, row.getBottom(), x, row.getBottom() - s * 1.4f);
-    g.setColour(colour);
-    g.fillPath(head);
+    g.setColour(ui::frameColour(mood_).withAlpha(0.55f));
+    g.fillRect(x - 1.0f, row.getY(), 2.0f, row.getHeight());
 }
 
 // ---------------------------------------------------------------------------
 
-// Janela de APRESENTACAO: sem barra de titulo, sem botoes, ocupando um monitor
-// inteiro. Barra de titulo e botao de fechar nao tem uso aqui - esta janela
-// fica virada para a plateia ou para quem toca, e um "X" no canto so serve
-// para alguem fechar sem querer no meio da feira. Quem mostra, esconde e
-// escolhe o monitor e a janela de controles (menu "Telas").
 PerformanceWindow::PerformanceWindow(const juce::String& name, juce::Component* content)
     : DocumentWindow(name, theme::enclosure, 0) {
     setUsingNativeTitleBar(false);
@@ -160,18 +143,16 @@ void PerformanceWindow::showOnDisplay(int displayIndex) {
         setVisible(true);
         return;
     }
-
     const auto& display = displays[juce::jlimit(0, displays.size() - 1, displayIndex)];
-    // totalArea, nao userArea: tela cheia de verdade, sem a faixa da barra de
-    // tarefas. Nao e always-on-top de proposito - se as duas janelas caissem no
-    // mesmo monitor, uma janela sempre no topo esconderia os controles.
+    // Tela cheia de verdade (sem a faixa da barra de tarefas). Nao e
+    // always-on-top: se as duas janelas cairem no mesmo monitor, uma janela
+    // sempre no topo esconderia os controles.
     setBounds(display.totalArea);
     setVisible(true);
     toFront(true);
 }
 
 void PerformanceWindow::closeButtonPressed() {
-    // Esconder, nao encerrar: quem fecha o app e a janela de controles.
     setVisible(false);
     if (onHidden) {
         onHidden();
@@ -179,8 +160,7 @@ void PerformanceWindow::closeButtonPressed() {
 }
 
 bool PerformanceWindow::keyPressed(const juce::KeyPress& key) {
-    // Valvula de escape: sem barra de titulo, ESC e a unica saida a partir da
-    // propria janela se ela ficar na frente de algo na hora errada.
+    // Sem barra de titulo, ESC e a unica saida a partir da propria janela.
     if (key == juce::KeyPress::escapeKey) {
         closeButtonPressed();
         return true;
