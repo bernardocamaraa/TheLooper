@@ -74,8 +74,9 @@ public:
 
     // Overdub sem parar: fecha a volta que terminou como camada e continua
     // gravando numa camada nova, sem mudar de estado. Chamado pela LooperEngine
-    // quando a escrita passa pelo comeco do loop. Retorna false (e a volta
-    // seguinte continua na mesma camada) se nao houver buffer pronto.
+    // quando a escrita volta ao ponto onde o passe comecou (uma volta inteira).
+    // Uma volta em silencio nao vira camada. Retorna false (e a volta seguinte
+    // continua na mesma camada) se nao houver buffer pronto.
     bool splitCapture();
 
     // Aborta a captura em andamento SEM commitar (tira da soma o que ela ja
@@ -188,7 +189,8 @@ private:
     int effectiveLayers() const { return committedLayers() - pendingUndos_; }
     void publishCount();
     void pushRecent(LayerBuffer* layer);
-    void startPeel(LayerBuffer* layer);
+    void startPeel(LayerBuffer* layer);    // a camada inteira (todos os pedacos)
+    void startPeelOne(LayerBuffer* piece);
     void finishPeel(int index);
     // Buffer zerado para uma camada: da reserva da track, senao do LayerStore.
     LayerBuffer* takeLayerBuffer(bool full);
@@ -214,6 +216,15 @@ private:
     LayerBuffer* capture_ = nullptr; // camada em gravacao
     // true quando a captura em andamento e a que esta definindo o loop mestre.
     bool captureDefinesMaster_ = false;
+
+    // Passe em andamento: voltas inteiras ja fechadas, e frames/pico da volta
+    // atual e do passe todo (ver closeCapture e splitCapture).
+    int lapsInPass_ = 0;
+    int64_t lapFrames_ = 0;
+    float lapPeak_ = 0.0f;
+    int64_t passFrames_ = 0;
+    float passPeak_ = 0.0f;
+    double sampleRate_ = config::kPreferredSampleRate;
 
     // Camadas recentes, da mais antiga [0] para a mais nova.
     std::array<LayerBuffer*, config::kRecentLayerSlots> recent_{};

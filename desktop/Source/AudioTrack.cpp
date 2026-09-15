@@ -38,6 +38,7 @@ void AudioTrack::setSampleRate(double sampleRate) {
     }
     // Se o driver abrir acima de kMaxSupportedSampleRate os buffers nao
     // crescem - o que encolhe e a duracao maxima de loop.
+    sampleRate_ = sampleRate;
     const int64_t wanted = static_cast<int64_t>(config::kMaxLoopSeconds * sampleRate);
     capacitySamples_ = std::min(wanted, allocatedFrames_);
 
@@ -67,6 +68,11 @@ bool AudioTrack::beginCapture(int64_t masterLoopLengthSamples) {
 
     capture_ = buffer;
     state_ = TrackState::RECORDING;
+    lapsInPass_ = 0;
+    lapFrames_ = 0;
+    lapPeak_ = 0.0f;
+    passFrames_ = 0;
+    passPeak_ = 0.0f;
     return true;
 }
 
@@ -74,6 +80,34 @@ bool AudioTrack::closeCapture() {
     if (capture_ == nullptr) {
         return false; // nao havia captura em andamento
     }
+
+    // O passe que define o loop sempre vira camada (mesmo em silencio: pode
+    // ser uma contagem de proposito, e e ele que da o tamanho do loop).
+    if (!captureDefinesMaster_) {
+        if (lapsInPass_ > 0 && (lapFrames_ < loopLength_ || lapPeak_ < config::kSilentLayerPeak) &&
+            recentCount_ > 0) {
+            // Parou no meio de uma volta: a sobra NAO vira camada nova, entra
+            // na ultima volta inteira deste passe (o desfazer tira as duas).
+            LayerBuffer* tail = recent_[static_cast<size_t>(recentCount_ - 1)];
+            while (tail->chain != nullptr) {
+                tail = tail->chain;
+            }
+            tail->chain = capture_;
+            capture_ = nullptr;
+            captureDefinesMaster_ = false;
+            state_ = TrackState::PLAYING;
+            publishCount();
+            return true;
+        }
+        const auto minFrames = static_cast<int64_t>(config::kMinLayerSeconds * sampleRate_);
+        if (lapsInPass_ == 0 && (passFrames_ < minFrames || passPeak_ < config::kSilentLayerPeak)) {
+            // Passe curto demais ou mudo - por exemplo, parar logo depois de
+            // fechar a base, que ja abre um overdub sozinha: nao cria camada.
+            cancelCapture();
+            return true;
+        }
+    }
+
     pushRecent(capture_);
     capture_ = nullptr;
     captureDefinesMaster_ = false;
@@ -86,12 +120,22 @@ bool AudioTrack::splitCapture() {
     if (capture_ == nullptr || captureDefinesMaster_ || store_ == nullptr) {
         return false;
     }
+    if (lapPeak_ < config::kSilentLayerPeak) {
+        // Volta inteira em silencio: nao vira camada. A proxima volta continua
+        // no mesmo buffer, que so tem silencio.
+        lapFrames_ = 0;
+        lapPeak_ = 0.0f;
+        return true;
+    }
     LayerBuffer* next = takeLayerBuffer(false);
     if (next == nullptr) {
         return false; // sem buffer pronto: a proxima volta continua nesta camada
     }
     pushRecent(capture_);
     capture_ = next;
+    ++lapsInPass_;
+    lapFrames_ = 0;
+    lapPeak_ = 0.0f;
     publishCount();
     return true;
 }
@@ -228,6 +272,17 @@ void AudioTrack::pushRecent(LayerBuffer* layer) {
 }
 
 void AudioTrack::startPeel(LayerBuffer* layer) {
+    // Uma camada pode ter mais de um pedaco (sobra de volta incompleta): cada
+    // pedaco vira um desfazer em andamento proprio.
+    while (layer != nullptr) {
+        LayerBuffer* next = layer->chain;
+        layer->chain = nullptr;
+        startPeelOne(layer);
+        layer = next;
+    }
+}
+
+void AudioTrack::startPeelOne(LayerBuffer* layer) {
     if (layer == nullptr) {
         return;
     }
@@ -460,6 +515,10 @@ void AudioTrack::writeFrame(const float* inputFrame, int64_t position) {
         peak = std::max(peak, std::fabs(routed[ch]));
     }
     mixDirtyFrames_ = std::max(mixDirtyFrames_, position + 1);
+    ++lapFrames_;
+    ++passFrames_;
+    lapPeak_ = std::max(lapPeak_, peak);
+    passPeak_ = std::max(passPeak_, peak);
     framePeak_ = std::max(framePeak_, peak); // mixFrameInto junta com a reproducao
 }
 

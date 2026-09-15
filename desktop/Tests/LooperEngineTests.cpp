@@ -2,15 +2,17 @@
 //
 // O teste dirige a LooperEngine como o callback de audio faria (serviceBlock a
 // cada 256 frames, processFrame por frame, botoes entre os blocos) com audio
-// sintetico, e mantem em paralelo o que CADA camada deveria ter gravado. Depois
-// de cada gravacao e de cada desfazer, a soma da track (readTrackMix) tem de
-// bater amostra por amostra com a soma das camadas que sobraram.
+// sintetico, e mantem em paralelo o que CADA camada deveria ter gravado -
+// seguindo as mesmas regras do motor para o que conta como camada (ver
+// config::kSilentLayerPeak). Depois de cada gravacao e de cada desfazer, a soma
+// da track (readTrackMix) tem de bater amostra por amostra com a soma das
+// camadas que sobraram, e o numero de camadas tambem.
 //
 // Rodar: build/Release/LooperEngineTests.exe  (sai com codigo 1 se algo falhar)
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <memory>
 #include <thread>
 #include <vector>
 
@@ -29,11 +31,11 @@ void expect(bool ok, const char* what) {
     }
 }
 
-// Sinal pequeno e diferente por camada: 300+ camadas somadas ficam longe do
-// limiter, e uma camada trocada por outra apareceria na comparacao.
+// Sinal diferente por camada, com pico de 0,01 (bem acima do limiar de
+// silencio): uma camada trocada por outra apareceria na comparacao.
 float signal(int seed, int64_t frame) {
     const int v = static_cast<int>((seed * 131 + frame * 7) % 29) - 14;
-    return 0.0005f * static_cast<float>(v) / 14.0f;
+    return 0.01f * static_cast<float>(v) / 14.0f;
 }
 
 class Harness {
@@ -45,34 +47,47 @@ public:
     }
 
     void press(protocol::ButtonId button, protocol::Gesture gesture = protocol::kGesturePress) {
+        const int before = pass_.track;
+        const bool loopWasDefined = engine.masterLoopLength() > 0;
         engine.handleButtonEvent(button, gesture);
-        syncCaptures();
+
+        if (before >= 0) {
+            const bool stillRecording = engine.trackState(before) == TrackState::RECORDING;
+            // Fechar a base abre um overdub na mesma track: o passe mudou mesmo
+            // com a track continuando em RECORDING.
+            const bool baseJustClosed = !loopWasDefined && engine.masterLoopLength() > 0;
+            if (!stillRecording || baseJustClosed) {
+                const bool cancelled = (button == protocol::kButtonUndo && gesture == protocol::kGesturePress);
+                if (!cancelled) {
+                    finishPass();
+                }
+                pass_ = Pass{};
+            }
+        }
+        if (pass_.track < 0) {
+            for (int t = 0; t < config::kNumTracks; ++t) {
+                if (engine.trackState(t) == TrackState::RECORDING) {
+                    pass_.track = t;
+                    pass_.base = engine.masterLoopLength() == 0;
+                    break;
+                }
+            }
+        }
+        if (humanTiming) {
+            breathe();
+        }
     }
 
-    // Roda `frames` frames como o callback faria, gravando `seed` na track que
-    // estiver capturando - e anotando onde cada amostra foi parar.
-    void run(int64_t frames, int seed) {
+    // Roda `frames` frames como o callback faria, com o sinal `seed` (vezes
+    // gain) na entrada - e anota o que a track que grava deveria guardar.
+    void run(int64_t frames, int seed, float gain = 1.0f) {
         for (int64_t i = 0; i < frames; ++i) {
             if ((blockCounter_++ % 256) == 0) {
                 engine.serviceBlock();
             }
-            const float v = signal(seed, i);
-            if (capturing_ >= 0) {
-                const auto pos = static_cast<size_t>(std::llround(engine.loopPositionSeconds() * kSampleRate));
-                // Cada volta de overdub e uma camada: quando a escrita passa
-                // pelo comeco do loop, a volta anterior fecha (igual ao motor).
-                if (pos == 0 && engine.masterLoopLength() > 0 && !current_->empty()) {
-                    current_->resize(static_cast<size_t>(engine.masterLoopLength()) * 2, 0.0f);
-                    layers_[capturing_].push_back(std::move(*current_));
-                    current_ = std::make_unique<std::vector<float>>();
-                    ++layersAtStart_;
-                }
-                auto& layer = *current_;
-                if (layer.size() < (pos + 1) * 2) {
-                    layer.resize((pos + 1) * 2, 0.0f);
-                }
-                layer[pos * 2] += v;
-                layer[pos * 2 + 1] += v;
+            const float v = signal(seed, i) * gain;
+            if (pass_.track >= 0) {
+                record(v);
             }
             const float in[config::kNumChannels] = {v, v};
             float out[config::kNumChannels] = {};
@@ -80,7 +95,8 @@ public:
         }
     }
 
-    // Entrada constante, sem gravar nada (para o teste do VU).
+    // Entrada constante, com nada gravando (para o teste do VU e para andar o
+    // transporte).
     void runInput(int64_t frames, float value) {
         for (int64_t i = 0; i < frames; ++i) {
             if ((blockCounter_++ % 256) == 0) {
@@ -103,7 +119,7 @@ public:
             if (settled) {
                 return true;
             }
-            run(256, 0);
+            runInput(256, 0.0f);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         return false;
@@ -143,10 +159,12 @@ public:
         for (size_t i = 0; i < got.size(); ++i) {
             worst = std::max(worst, static_cast<double>(std::fabs(got[i] - want[i])));
         }
-        if (worst > 1e-4) {
-            std::printf("    track %d: diferenca maxima %.6g\n", track, worst);
+        const bool countOk = engine.trackLayers(track) == static_cast<int>(layers_[track].size());
+        if (worst > 1e-4 || !countOk) {
+            std::printf("    track %d: diferenca maxima %.6g, camadas %d (esperado %zu)\n", track, worst,
+                        engine.trackLayers(track), layers_[track].size());
         }
-        return worst <= 1e-4 && engine.trackLayers(track) == static_cast<int>(layers_[track].size());
+        return worst <= 1e-4 && countOk;
     }
 
     bool allMatch() {
@@ -158,44 +176,90 @@ public:
     }
 
     LooperEngine engine;
+    // Espera um pouco depois de cada botao, como uma pessoa: sem isso o teste
+    // aperta mais rapido do que a thread do LayerStore repoe os buffers.
+    bool humanTiming = false;
 
 private:
+    // O passe em andamento, espelhando o que o motor faz (ver
+    // AudioTrack::closeCapture / splitCapture).
+    struct Pass {
+        int track = -1;
+        bool base = false; // o passe que define o loop
+        bool started = false;
+        size_t startPos = 0;
+        int laps = 0;
+        int64_t lapFrames = 0;
+        float lapPeak = 0.0f;
+        int64_t passFrames = 0;
+        float passPeak = 0.0f;
+        std::vector<float> current;
+    };
+
+    static std::vector<float> padded(std::vector<float> layer, int64_t length) {
+        layer.resize(static_cast<size_t>(length) * 2, 0.0f);
+        return layer;
+    }
+
+    void record(float v) {
+        const auto pos = static_cast<size_t>(std::llround(engine.loopPositionSeconds() * kSampleRate));
+        const int64_t length = engine.masterLoopLength();
+        if (!pass_.started) {
+            pass_.started = true;
+            pass_.startPos = pos;
+        } else if (!pass_.base && length > 0 && pos == pass_.startPos) {
+            // Uma volta inteira desde o inicio do passe.
+            if (pass_.lapPeak < config::kSilentLayerPeak) {
+                pass_.lapFrames = 0; // volta muda: nao vira camada
+                pass_.lapPeak = 0.0f;
+            } else {
+                layers_[pass_.track].push_back(padded(std::move(pass_.current), length));
+                pass_.current.clear();
+                ++pass_.laps;
+                pass_.lapFrames = 0;
+                pass_.lapPeak = 0.0f;
+            }
+        }
+        if (pass_.current.size() < (pos + 1) * 2) {
+            pass_.current.resize((pos + 1) * 2, 0.0f);
+        }
+        pass_.current[pos * 2] += v;
+        pass_.current[pos * 2 + 1] += v;
+        ++pass_.lapFrames;
+        ++pass_.passFrames;
+        pass_.lapPeak = std::max(pass_.lapPeak, std::fabs(v));
+        pass_.passPeak = std::max(pass_.passPeak, std::fabs(v));
+    }
+
+    void finishPass() {
+        const int64_t length = engine.masterLoopLength();
+        auto& list = layers_[pass_.track];
+        const auto minFrames = static_cast<int64_t>(config::kMinLayerSeconds * kSampleRate);
+        std::vector<float> layer = padded(std::move(pass_.current), length);
+        if (pass_.base) {
+            list.push_back(std::move(layer));
+        } else if (pass_.laps > 0 && (pass_.lapFrames < length || pass_.lapPeak < config::kSilentLayerPeak) &&
+                   !list.empty()) {
+            auto& last = list.back(); // sobra de volta: entra na ultima volta inteira
+            for (size_t i = 0; i < last.size() && i < layer.size(); ++i) {
+                last[i] += layer[i];
+            }
+        } else if (pass_.laps == 0 &&
+                   (pass_.passFrames < minFrames || pass_.passPeak < config::kSilentLayerPeak)) {
+            // curto demais ou mudo: nao vira camada
+        } else {
+            list.push_back(std::move(layer));
+        }
+    }
+
     void waitForSpares() {
         for (int i = 0; i < 2000 && engine.layerStore().readyFullBuffers() < config::kSpareFullBuffers; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
-    // Espelha o que a FSM fez com as capturas depois de um botao: fechou
-    // (camada nova), cancelou (descarta) ou abriu outra.
-    void syncCaptures() {
-        if (capturing_ >= 0) {
-            const int layersNow = engine.trackLayers(capturing_);
-            const bool stillRecording = engine.trackState(capturing_) == TrackState::RECORDING;
-            if (layersNow > layersAtStart_) {
-                current_->resize(static_cast<size_t>(engine.masterLoopLength()) * 2, 0.0f);
-                layers_[capturing_].push_back(std::move(*current_));
-                capturing_ = -1;
-            } else if (!stillRecording) {
-                capturing_ = -1; // cancelado
-            } else {
-                return; // o mesmo passe continua
-            }
-        }
-        for (int t = 0; t < config::kNumTracks; ++t) {
-            if (engine.trackState(t) == TrackState::RECORDING) {
-                capturing_ = t;
-                layersAtStart_ = engine.trackLayers(t);
-                current_ = std::make_unique<std::vector<float>>();
-                break;
-            }
-        }
-    }
-
     std::vector<std::vector<float>> layers_[config::kNumTracks];
-    std::unique_ptr<std::vector<float>> current_;
-    int capturing_ = -1;
-    int layersAtStart_ = 0;
+    Pass pass_;
     int64_t blockCounter_ = 0;
 };
 
@@ -204,7 +268,7 @@ using protocol::kButtonTrack1;
 using protocol::kButtonTrack2;
 using protocol::kButtonUndo;
 
-// Loop mestre na track 1 + (layers - 1) overdubs, um por volta.
+// Loop mestre na track 1 + (layers - 1) overdubs de uma volta cada.
 void recordLayers(Harness& h, int layers, int seedBase) {
     h.press(kButtonRecPlay);        // abre o passe que define o loop
     h.run(kLoopFrames, seedBase);
@@ -217,6 +281,9 @@ void recordLayers(Harness& h, int layers, int seedBase) {
         if (k + 1 < layers) {
             h.press(kButtonRecPlay); // abre o proximo
         }
+    }
+    if (layers == 1) {
+        h.press(kButtonRecPlay);    // fecha o overdub vazio que a base abriu
     }
 }
 
@@ -257,7 +324,7 @@ void testRapidUndo() {
     for (int k = 0; k < 59; ++k) {
         h.press(kButtonUndo);
         h.undoExpected(0);
-        h.run(64, 0); // bem menos que um bloco entre os toques
+        h.runInput(64, 0.0f); // bem menos que um bloco entre os toques
     }
     expect(h.settle(), "os desfazer pendentes terminaram");
     expect(h.matches(0), "sobrou so a camada base, exata");
@@ -272,6 +339,7 @@ void testMultiTrackCancelClear() {
     h.run(kLoopFrames + kLoopFrames / 2, 950);
     h.press(kButtonRecPlay);
     expect(h.settle() && h.allMatch(), "track 2 com passe de 1,5 volta + track 1 intacta");
+    expect(h.engine.trackLayers(1) == 1, "1,5 volta = 1 camada (a sobra entra na volta inteira)");
 
     h.press(kButtonTrack1);
     h.press(kButtonRecPlay);           // overdub na track 1...
@@ -280,13 +348,9 @@ void testMultiTrackCancelClear() {
     expect(h.settle() && h.allMatch(), "passe cancelado sumiu da soma");
 
     h.press(kButtonTrack2);
-    bool lapsOk = h.expectedLayers(1) >= 2; // o passe de 1,5 volta virou mais de uma camada
-    while (h.expectedLayers(1) > 0) {
-        h.press(kButtonUndo);
-        h.undoExpected(1);
-        lapsOk = h.settle() && h.allMatch() && lapsOk;
-    }
-    expect(lapsOk && h.engine.loopDefined(), "track 2 desfeita volta a volta, loop mestre continua");
+    h.press(kButtonUndo);
+    h.undoExpected(1);
+    expect(h.settle() && h.allMatch() && h.engine.loopDefined(), "track 2 limpa, loop mestre continua");
 
     h.press(kButtonUndo, protocol::kGestureLongPress); // Clear All
     h.clearExpected();
@@ -326,7 +390,7 @@ void testOverdubLaps() {
     h.press(kButtonRecPlay);           // fecha e ja abre o overdub
     h.breathe();
     h.run(kLoopFrames * 5, 1300);      // 5 voltas seguidas, sem apertar nada
-    h.press(kButtonRecPlay);           // fecha a ultima volta
+    h.press(kButtonRecPlay);           // fecha a ultima volta (inteira)
     expect(h.settle() && h.engine.trackLayers(0) == 6, "base + 5 voltas = 6 camadas");
     expect(h.allMatch(), "cada volta guardou exatamente o que foi tocado nela");
     expect(h.engine.bufferShortages() == 0, "nenhuma volta ficou sem buffer");
@@ -349,11 +413,11 @@ void testOverdubLaps() {
 void testSelectedMeter() {
     std::printf("\n6) VU: a track selecionada mede o que toca E a entrada\n");
     Harness h;
-    recordLayers(h, 2, 1500);          // track 1 tocando (sinal bem baixo), nada gravando
+    recordLayers(h, 2, 1500);          // track 1 tocando (sinal baixo), nada gravando
     h.press(kButtonTrack2);            // seleciona a track 2, vazia
     h.runInput(4800, 0.5f);            // entrada forte, sem gravar
     expect(h.engine.trackLevel(1) > 0.4f, "selecionada e vazia: mostra a entrada");
-    expect(h.engine.trackLevel(0) < 0.01f, "nao selecionada: so o que toca (a entrada nao entra)");
+    expect(h.engine.trackLevel(0) < 0.1f, "nao selecionada: so o que toca (a entrada nao entra)");
 
     h.press(kButtonTrack1);            // seleciona a track 1, que esta tocando
     h.runInput(4800, 0.5f);
@@ -369,6 +433,58 @@ void testSelectedMeter() {
     expect(h.engine.trackLevel(0) < 0.01f, "parado e sem selecao: o VU da track cai a zero");
 }
 
+void testWhatCountsAsLayer() {
+    std::printf("\n7) O que conta como camada: voltas a partir do inicio do passe, sobra e passes mudos\n");
+    Harness h;
+    h.humanTiming = true;
+    h.press(kButtonRecPlay);           // base...
+    h.run(kLoopFrames, 2000);
+    h.press(kButtonRecPlay);           // ...fecha e o overdub abre sozinho
+    h.run(kLoopFrames / 10, 0, 0.0f);  // 10 ms de nada...
+    h.press(kButtonRecPlay);           // ...e para
+    expect(h.settle() && h.engine.trackLayers(0) == 1 && h.allMatch(),
+           "parar logo depois da base nao cria camada");
+
+    h.runInput(kLoopFrames / 2, 0.0f); // anda meio loop sem gravar
+    h.press(kButtonRecPlay);
+    h.run(kLoopFrames * 6 / 10, 2100); // 0,6 volta, cruzando o comeco do loop
+    h.press(kButtonRecPlay);
+    expect(h.settle() && h.engine.trackLayers(0) == 2 && h.allMatch(),
+           "0,6 volta comecando no meio do loop = 1 camada");
+
+    h.runInput(kLoopFrames / 3, 0.0f);
+    h.press(kButtonRecPlay);
+    h.run(kLoopFrames * 13 / 10, 2200);
+    h.press(kButtonRecPlay);
+    expect(h.settle() && h.engine.trackLayers(0) == 3 && h.allMatch(),
+           "1,3 volta = 1 camada (a sobra entra na volta inteira)");
+
+    h.press(kButtonRecPlay);
+    h.run(kLoopFrames * 2, 2300);
+    h.press(kButtonRecPlay);
+    expect(h.settle() && h.engine.trackLayers(0) == 5 && h.allMatch(), "2 voltas inteiras = 2 camadas");
+
+    h.press(kButtonRecPlay);
+    h.run(kLoopFrames * 3 / 2, 0, 0.0f);
+    h.press(kButtonRecPlay);
+    expect(h.settle() && h.engine.trackLayers(0) == 5 && h.allMatch(), "gravar em silencio nao cria camada");
+
+    h.press(kButtonRecPlay);
+    h.run(kLoopFrames, 0, 0.0f);       // uma volta muda...
+    h.run(kLoopFrames, 2400);          // ...e uma tocada
+    h.press(kButtonRecPlay);
+    expect(h.settle() && h.engine.trackLayers(0) == 6 && h.allMatch(), "volta muda + volta tocada = 1 camada");
+
+    bool ok = true;
+    while (h.expectedLayers(0) > 1) {
+        h.press(kButtonUndo);
+        h.undoExpected(0);
+        ok = h.settle() && h.allMatch() && ok;
+    }
+    expect(ok, "desfazer tira cada camada certa, inclusive a volta com sobra");
+    expect(h.engine.bufferShortages() == 0, "nunca faltou buffer (todos os passes comecaram de verdade)");
+}
+
 } // namespace
 
 int main() {
@@ -379,6 +495,7 @@ int main() {
     testLoadedSession();
     testOverdubLaps();
     testSelectedMeter();
+    testWhatCountsAsLayer();
     std::printf("\n%s (%d falha%s)\n", failures == 0 ? "TUDO OK" : "HOUVE FALHAS", failures,
                 failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

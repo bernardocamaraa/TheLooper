@@ -403,12 +403,15 @@ void LooperEngine::processFrame(const float* input, float* output, float* perTra
 
     if (transportPlaying_ && capturingTrack_ >= 0) {
         const int64_t writePosition = writePositionFor(transportPosition_);
-        // CADA VOLTA DE OVERDUB E UMA CAMADA: quando a escrita passa pelo
-        // comeco do loop, a volta que terminou vira camada e a seguinte comeca
-        // numa camada nova, sem cortar o audio. Assim o desfazer tira uma volta
-        // por vez. (Nao vale para o passe que define o loop, que ainda nao tem
-        // volta nenhuma.)
-        if (writePosition == 0 && captureWritten_ && masterLoopLengthSamples_ > 0) {
+        // CADA VOLTA INTEIRA DE OVERDUB E UMA CAMADA, contada a partir de onde
+        // o passe COMECOU (nao do comeco do loop - senao um overdub de meia
+        // volta comecado no meio virava duas camadas). Quando a escrita volta
+        // a esse ponto, a volta que terminou vira camada e a seguinte comeca
+        // outra, sem cortar o audio. (Nao vale para o passe que define o loop,
+        // que ainda nao tem volta nenhuma.)
+        if (!captureWritten_) {
+            captureStartPosition_ = writePosition;
+        } else if (writePosition == captureStartPosition_ && masterLoopLengthSamples_ > 0) {
             if (!tracks_[capturingTrack_].splitCapture()) {
                 bufferShortages_.fetch_add(1, std::memory_order_relaxed);
             }

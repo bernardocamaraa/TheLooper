@@ -76,6 +76,16 @@ constexpr int kSpareLoopBuffers = 4;
 // overdub ainda tem onde abrir as proximas voltas sem perder nada.
 constexpr int kTrackReserveBuffers = 2;
 
+// O que conta como camada num overdub (ver AudioTrack::closeCapture):
+// - uma volta inteira, contada a partir de onde o passe comecou;
+// - a sobra de uma volta incompleta ao parar se junta a ultima volta inteira;
+// - um passe que nao completou nenhuma volta vira uma camada, a nao ser que
+//   seja curto demais (toque duplo) ou mudo (so ruido de fundo) - ai nao vira
+//   nada. Uma volta inteira em silencio tambem nao vira camada.
+// Pico abaixo de -54 dBFS e considerado silencio.
+constexpr float kSilentLayerPeak = 0.002f;
+constexpr double kMinLayerSeconds = 0.05;
+
 // Acima disto, as camadas guardadas pelo LayerStore mais antigas vao para
 // arquivos temporarios em disco (e voltam quando o desfazer chega nelas).
 constexpr int64_t kDefaultLayerRamBudgetBytes = int64_t{1536} * 1024 * 1024;

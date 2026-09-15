@@ -107,11 +107,18 @@ sem precisar trocar de modo).
     valendo sem nenhum áudio na tela para justificá-lo, e a única forma de
     mudá-lo seria o hold de 3s — a próxima gravação ficaria presa a um loop
     invisível.
-- **Cada volta de overdub é uma camada**: gravando sem parar, toda vez que o
-  loop passa pelo começo a volta que terminou vira uma camada e a seguinte
-  começa outra, sem cortar o áudio. O peel tira uma volta por vez; apertado
-  durante a gravação, cancela só a volta em andamento. Não há limite de
-  camadas (as antigas vão para o disco — ver `LayerStore.h`).
+- **O que é uma camada num overdub** (ver `AudioTrack::closeCapture`):
+  - cada **volta inteira**, contada a partir de onde o passe começou (não do
+    começo do loop), vira uma camada — sem cortar o áudio;
+  - ao parar no meio de uma volta, a **sobra entra na última volta inteira**
+    daquele passe, e o peel tira as duas juntas;
+  - um passe que não completou nenhuma volta vira uma camada — a não ser que
+    seja curto demais (< 50 ms) ou mudo (pico < -54 dBFS), como parar logo
+    depois de fechar a base (que já abre um overdub sozinha): aí não vira nada;
+  - uma volta inteira em silêncio também não vira camada. A base (passe que
+    define o loop) sempre vira, mesmo em silêncio.
+  O peel apertado durante a gravação cancela só a volta em andamento. Não há
+  limite de camadas (as antigas vão para o disco — ver `LayerStore.h`).
 - **Long press (3s)**: **Clear All** — limpa todas as 4 tracks e reseta o
   comprimento do loop mestre (volta ao estado "primordial"). Não muda o modo
   global (`REC_MODE`/`PLAY_MODE`) nem a track selecionada permanece a mesma

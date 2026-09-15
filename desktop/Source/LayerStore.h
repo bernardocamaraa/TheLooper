@@ -37,6 +37,10 @@ struct LayerBuffer {
     explicit LayerBuffer(int64_t frameCount)
         : frames(frameCount),
           samples(static_cast<size_t>(frameCount) * config::kNumChannels, 0.0f) {}
+    ~LayerBuffer() { delete chain; }
+
+    LayerBuffer(const LayerBuffer&) = delete;
+    LayerBuffer& operator=(const LayerBuffer&) = delete;
 
     float* data() { return samples.data(); }
     const float* data() const { return samples.data(); }
@@ -44,6 +48,10 @@ struct LayerBuffer {
 
     int64_t frames = 0;
     std::vector<float> samples;
+    // Outros pedacos da MESMA camada: a sobra de uma volta incompleta que se
+    // juntou a volta anterior ao parar de gravar. Quem e dono do primeiro e
+    // dono da corrente; o LayerStore funde tudo num buffer so ao guardar.
+    LayerBuffer* chain = nullptr;
 };
 
 // Camada devolvida pelo LayerStore (requestRefill). generation e a mesma da

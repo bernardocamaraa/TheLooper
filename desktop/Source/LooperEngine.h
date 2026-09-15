@@ -210,6 +210,8 @@ private:
     // A captura em andamento ja escreveu alguma amostra? Sem isso a volta
     // seria fechada no mesmo frame em que comecou (ver processFrame).
     bool captureWritten_ = false;
+    // Onde o passe em andamento comecou a escrever: cada volta conta daqui.
+    int64_t captureStartPosition_ = 0;
 
     std::atomic<int> bufferShortages_{0};
 

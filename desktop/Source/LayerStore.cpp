@@ -226,6 +226,18 @@ void LayerStore::handle(const Request& request) {
                 break;
             }
             LayerBuffer* buffer = request.buffer;
+            // Camada em mais de um pedaco (sobra de volta incompleta): funde
+            // aqui, fora da thread de audio, e o desfazer passa a tirar um so.
+            while (buffer->chain != nullptr) {
+                LayerBuffer* part = buffer->chain;
+                buffer->chain = part->chain;
+                part->chain = nullptr;
+                const int64_t count = std::min(buffer->frames, part->frames) * config::kNumChannels;
+                for (int64_t i = 0; i < count; ++i) {
+                    buffer->samples[static_cast<size_t>(i)] += part->samples[static_cast<size_t>(i)];
+                }
+                recycle(part);
+            }
             if (loopFrames_ > 0 && buffer->frames > loopFrames_) {
                 // Camada num buffer cheio (o passe que definiu o loop, ou uma
                 // volta que pegou um cheio por falta de outro): guarda so o
@@ -281,6 +293,11 @@ void LayerStore::handle(const Request& request) {
 void LayerStore::recycle(LayerBuffer* buffer) {
     if (buffer == nullptr) {
         return;
+    }
+    if (buffer->chain != nullptr) {
+        LayerBuffer* rest = buffer->chain;
+        buffer->chain = nullptr;
+        recycle(rest);
     }
     // Reaproveita (zerado) o que cabe numa das reservas; o resto e destruido.
     if (buffer->frames == fullFrames_ && static_cast<int>(freeFull_.size()) < config::kSpareFullBuffers) {
