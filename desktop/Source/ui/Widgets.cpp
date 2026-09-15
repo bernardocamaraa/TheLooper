@@ -440,6 +440,12 @@ void askText(const juce::String& title, const juce::String& message, const juce:
                                 }
                             }),
                             false);
+    // O AlertWindow nao da foco ao campo sozinho: sem isto o que se digita nao
+    // chega nele (so o Enter, que confirma o nome antigo).
+    if (auto* editor = window->getTextEditor("text")) {
+        editor->grabKeyboardFocus();
+        editor->selectAll();
+    }
 }
 
 void notify(const juce::String& title, const juce::String& message) {
