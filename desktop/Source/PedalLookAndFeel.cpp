@@ -438,15 +438,22 @@ void PedalLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& but
     }
 
     if (!enabled) {
-        fill = fill.withMultipliedAlpha(0.5f);
-        border = border.withMultipliedAlpha(0.5f);
+        // Botao cheio desligado vira superficie apagada: branco a meia opacidade
+        // parecia um botao aceso.
+        if (style == "big" || style == "primary") {
+            fill = p.s2;
+            border = p.line;
+        } else {
+            fill = fill.withMultipliedAlpha(0.5f);
+            border = border.withMultipliedAlpha(0.5f);
+        }
     } else if (down) {
         fill = fill.isTransparent() ? p.s3 : fill.darker(0.15f);
     } else if (highlighted) {
         fill = fill.isTransparent() ? p.s2 : (theme::isDark() ? fill.brighter(0.08f) : fill.darker(0.04f));
     }
 
-    if (style == "big" || style == "primary") {
+    if (enabled && (style == "big" || style == "primary")) {
         g.setColour(juce::Colours::black.withAlpha(theme::isDark() ? 0.3f : 0.08f));
         g.fillRoundedRectangle(r.translated(0.0f, 2.0f), radius);
     }
@@ -476,7 +483,7 @@ void PedalLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& butto
         colour = contrastingText(button.findColour(juce::TextButton::buttonColourId));
     }
     if (!button.isEnabled()) {
-        colour = colour.withMultipliedAlpha(0.45f);
+        colour = (style == "big" || style == "primary") ? p.t3 : colour.withMultipliedAlpha(0.45f);
     } else if (down) {
         colour = colour.withMultipliedAlpha(0.8f);
     }

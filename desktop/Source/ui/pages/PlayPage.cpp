@@ -110,7 +110,7 @@ void PlayPage::updateTransport() {
     juce::String icon = "rec";
     if (!playing) {
         label = "PLAY";
-        subtitle = "PLAY+REC  ·  retoma o loop";
+        subtitle = ui::utf8("PLAY+REC  ·  retoma o loop");
         colour = p.play;
         icon = "play";
     } else if (!recMode) {
@@ -120,10 +120,10 @@ void PlayPage::updateTransport() {
         icon = "play";
     } else if (engine.trackState(selected) == TrackState::RECORDING) {
         label = "FECHAR TAKE";
-        subtitle = "PLAY+REC  ·  encerra a camada";
+        subtitle = ui::utf8("PLAY+REC  ·  encerra a camada");
     } else {
         label = "GRAVAR";
-        subtitle = "PLAY+REC  ·  na track " + juce::String(selected + 1);
+        subtitle = ui::utf8("PLAY+REC  ·  na track ") + juce::String(selected + 1);
     }
 
     if (recPlay_.getButtonText() != label || recPlay_.getProperties()["subtitle"].toString() != subtitle ||

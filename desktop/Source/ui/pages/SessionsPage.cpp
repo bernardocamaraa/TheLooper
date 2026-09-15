@@ -379,9 +379,20 @@ void SessionsPage::resized() {
         detail_ = area.removeFromRight(juce::jmax(theme::px(290), area.getWidth() * 28 / 100));
         area.removeFromRight(theme::px(18));
         auto inner = detail_.reduced(theme::px(18));
-        juce::TextButton* buttons[] = {&reveal_, &trash_, &duplicate_, &rename_, &export_, &open_};
-        for (auto* b : buttons) {
-            b->setBounds(inner.removeFromBottom(theme::px(40)));
+        // Renomear e Duplicar dividem uma linha: sobra altura para os nomes das
+        // quatro tracks no detalhe.
+        const int rowH = theme::px(40);
+        for (auto* b : {&reveal_, &trash_}) {
+            b->setBounds(inner.removeFromBottom(rowH));
+            inner.removeFromBottom(gap);
+        }
+        auto pair = inner.removeFromBottom(rowH);
+        inner.removeFromBottom(gap);
+        rename_.setBounds(pair.removeFromLeft((pair.getWidth() - gap) / 2));
+        pair.removeFromLeft(gap);
+        duplicate_.setBounds(pair);
+        for (auto* b : {&export_, &open_}) {
+            b->setBounds(inner.removeFromBottom(rowH));
             inner.removeFromBottom(gap);
         }
         detailText_ = inner;
@@ -439,8 +450,17 @@ void SessionsPage::paint(juce::Graphics& g) {
         line("Taxa", juce::String(entry->info.sampleRate / 1000.0, 1) + " kHz");
         line("Tracks", juce::String(entry->info.tracksWithAudio()) + " de " + juce::String(config::kNumTracks));
         r.removeFromTop(theme::pxf(10.0f));
-        for (int t = 0; t < config::kNumTracks && r.getHeight() > theme::pxf(20.0f); ++t) {
-            auto row = r.removeFromTop(theme::pxf(22.0f));
+        // Duas colunas (1 e 2 em cima, 3 e 4 embaixo).
+        const float colW = r.getWidth() * 0.5f;
+        juce::Rectangle<float> pairRow;
+        for (int t = 0; t < config::kNumTracks; ++t) {
+            if (t % 2 == 0) {
+                if (r.getHeight() < theme::pxf(20.0f)) {
+                    break;
+                }
+                pairRow = r.removeFromTop(theme::pxf(22.0f));
+            }
+            const auto row = t % 2 == 0 ? pairRow.withWidth(colW) : pairRow.withTrimmedLeft(colW);
             const bool has = entry->info.hasAudio[static_cast<size_t>(t)];
             const float d = theme::pxf(9.0f);
             g.setColour(has ? theme::track(t) : p.s3);
