@@ -47,6 +47,11 @@ PlayPage::PlayPage(AppContext& context) : Page(context) {
         card->onClick = [this, i] {
             ctx_.sendPedalEvent(static_cast<protocol::ButtonId>(protocol::kButtonTrack1 + i), protocol::kGesturePress);
         };
+        card->onDoubleClick = [this, i] {
+            ui::askText("Renomear track " + juce::String(i + 1),
+                        ui::utf8("O nome aparece nos cartões, no mixer, no pedal e na tela de performance."),
+                        ctx_.trackName(i), "Renomear", [this, i](juce::String name) { ctx_.setTrackName(i, name); });
+        };
         addAndMakeVisible(*card);
         cards_[static_cast<size_t>(i)] = std::move(card);
     }
@@ -143,7 +148,7 @@ void PlayPage::refresh() {
     const int selected = engine.selectedTrack();
 
     // Subtitulo de altura fixa: trocar de modo nao pode mexer no layout.
-    const juce::String subtitle = recMode ? ui::utf8("Modo gravação  ·  toque num cartão para selecionar a track")
+    const juce::String subtitle = recMode ? ui::utf8("Modo gravação  ·  toque num cartão para selecionar a track  ·  duplo clique renomeia")
                                           : ui::utf8("Modo play  ·  toque num cartão para mutar a track");
     if (subtitle != subtitle_) {
         subtitle_ = subtitle;

@@ -75,9 +75,11 @@ public:
 
     void setData(const Data& data);
     std::function<void()> onClick;
+    std::function<void()> onDoubleClick; // renomear
 
     void paint(juce::Graphics& g) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
 private:
     juce::Rectangle<float> meterArea() const;

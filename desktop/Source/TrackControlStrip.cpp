@@ -200,3 +200,17 @@ void TrackControlStrip::paint(juce::Graphics& g) {
                            state_);
     }
 }
+
+void TrackControlStrip::useRenameDialog(std::function<void()> onClick) {
+    onNameClicked_ = std::move(onClick);
+    nameLabel_.setEditable(false, false, false);
+    nameLabel_.setTooltip("Clique para renomear");
+    nameLabel_.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    nameLabel_.addMouseListener(this, false);
+}
+
+void TrackControlStrip::mouseUp(const juce::MouseEvent& e) {
+    if (e.eventComponent == &nameLabel_ && e.mouseWasClicked() && onNameClicked_) {
+        onNameClicked_();
+    }
+}

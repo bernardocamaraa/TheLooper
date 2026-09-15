@@ -12,6 +12,14 @@ MixerPage::MixerPage(AppContext& context) : Page(context) {
         strip->setLevelSource([this, i] { return ctx_.engine().trackLevel(i); });
         strip->setValues(ctx_.trackName(i), engine.trackInputMask(i), engine.trackGain(i));
         strip->onNameChanged = [this, i](juce::String name) { ctx_.setTrackName(i, name); };
+        strip->useRenameDialog([this, i] {
+            ui::askText("Renomear track " + juce::String(i + 1),
+                        ui::utf8("O nome aparece nos cartões, no mixer, no pedal e na tela de performance."),
+                        ctx_.trackName(i), "Renomear", [this, i](juce::String name) {
+                            ctx_.setTrackName(i, name);
+                            pageShown();
+                        });
+        });
         strip->onInputMaskChanged = [this, i](uint32_t mask) { ctx_.setTrackInputMask(i, mask); };
         strip->onGainChanged = [this, i](float gain) { ctx_.setTrackGain(i, gain); };
         strip->onColourClicked = [this, i] {

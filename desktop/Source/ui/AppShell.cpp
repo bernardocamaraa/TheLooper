@@ -200,7 +200,7 @@ public:
     }
 
     void resized() override {
-        auto r = getLocalBounds().reduced(theme::px(compact ? 14 : 20), theme::px(10));
+        auto r = getLocalBounds().reduced(theme::px(compact ? 14.0f : 20.0f), theme::px(10));
         if (compact) {
             auto top = r.removeFromTop(r.getHeight() * 6 / 10);
             pillArea_ = top.removeFromLeft(theme::px(118)).withSizeKeepingCentre(theme::px(118), theme::px(38));

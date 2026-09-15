@@ -71,60 +71,40 @@ float paintStateChip(juce::Graphics& g, juce::Rectangle<float> area, TrackState 
 // --- Anel do loop -----------------------------------------------------------
 
 void paintLoopRings(juce::Graphics& g, juce::Rectangle<float> area, const RingState& ring) {
+    // Um anel so, na cor do modo (vermelho gravando, verde tocando, cinza
+    // parado). O estado de cada track ja aparece nos cartoes e no pedal; quatro
+    // aneis coloridos aqui so competiam com eles.
     const auto& p = theme::palette();
     const float size = juce::jmin(area.getWidth(), area.getHeight());
     const auto centre = area.getCentre();
-    const float thickness = size * 0.052f;
-    const float step = thickness * 1.45f;
-    const float outer = size * 0.5f - thickness;
+    const float thickness = size * 0.06f;
+    const float r = size * 0.5f - thickness;
     const float angle = static_cast<float>(ring.progress) * juce::MathConstants<float>::twoPi;
+    const juce::Colour colour = ring.mood == FrameMood::Stopped ? p.t3 : frameColour(ring.mood);
 
-    for (int i = 0; i < config::kNumTracks; ++i) {
-        const float r = outer - step * static_cast<float>(i);
-        g.setColour(p.s3);
-        g.drawEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f, thickness);
-
-        const TrackState state = ring.states[static_cast<size_t>(i)];
-        if (state == TrackState::EMPTY) {
-            continue;
-        }
-        juce::Colour colour = theme::track(i);
-        if (state == TrackState::MUTED) {
-            colour = colour.withAlpha(0.28f);
-        }
+    g.setColour(p.s3);
+    g.drawEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f, thickness);
+    if (ring.defined) {
         juce::Path arc;
-        if (state == TrackState::RECORDING && ring.defined) {
-            arc.addCentredArc(centre.x, centre.y, r, r, 0.0f, 0.0f, juce::jmax(0.001f, angle), true);
-        } else {
-            arc.addEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
-        }
+        arc.addCentredArc(centre.x, centre.y, r, r, 0.0f, 0.0f, juce::jmax(0.001f, angle), true);
         g.setColour(colour);
         g.strokePath(arc, juce::PathStrokeType(thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-    const float inner = outer - step * static_cast<float>(config::kNumTracks - 1) - thickness * 1.3f;
-    if (ring.defined) {
-        const float from = inner + thickness * 0.2f;
-        const float to = outer + thickness * 1.2f;
-        const float sx = std::sin(angle);
-        const float cy = -std::cos(angle);
+        const float dot = thickness * 0.8f;
+        const float x = centre.x + std::sin(angle) * r;
+        const float y = centre.y - std::cos(angle) * r;
         g.setColour(p.t1);
-        g.drawLine(centre.x + sx * from, centre.y + cy * from, centre.x + sx * to, centre.y + cy * to,
-                   juce::jmax(1.5f, thickness * 0.22f));
-        const float dot = thickness * 0.42f;
-        g.fillEllipse(centre.x + sx * to - dot, centre.y + cy * to - dot, dot * 2.0f, dot * 2.0f);
+        g.fillEllipse(x - dot, y - dot, dot * 2.0f, dot * 2.0f);
     }
 
     // Miolo: o tamanho do loop, em segundos.
-    g.setColour(p.s1);
-    g.fillEllipse(centre.x - inner, centre.y - inner, inner * 2.0f, inner * 2.0f);
+    const float inner = r - thickness * 1.5f;
     const auto textArea = juce::Rectangle<float>(inner * 2.0f, inner * 1.2f).withCentre(centre);
     g.setColour(p.t1);
-    g.setFont(theme::numbers(inner * 0.5f, true));
+    g.setFont(theme::numbers(inner * 0.42f, true));
     g.drawText(ring.defined ? juce::String(ring.lengthSeconds, 1) : juce::String("--"),
                textArea.withTrimmedBottom(textArea.getHeight() * 0.35f), juce::Justification::centredBottom, false);
     g.setColour(p.t3);
-    g.setFont(theme::caps(inner * 0.2f));
+    g.setFont(theme::caps(inner * 0.14f));
     g.drawText(ring.defined ? "SEGUNDOS" : "SEM LOOP", textArea.withTrimmedTop(textArea.getHeight() * 0.68f),
                juce::Justification::centredTop, false);
 }
@@ -272,6 +252,12 @@ void TrackCard::paint(juce::Graphics& g) {
 void TrackCard::mouseUp(const juce::MouseEvent& e) {
     if (e.mouseWasClicked() && onClick) {
         onClick();
+    }
+}
+
+void TrackCard::mouseDoubleClick(const juce::MouseEvent&) {
+    if (onDoubleClick) {
+        onDoubleClick();
     }
 }
 

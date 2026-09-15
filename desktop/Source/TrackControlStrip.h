@@ -35,6 +35,10 @@ public:
     void refreshColours();
 
     std::function<void(juce::String)> onNameChanged;
+    // Troca a edicao no lugar por um clique que chama onClick (a pagina abre
+    // um dialogo de nome). Sem isto, o nome segue editavel por duplo clique.
+    void useRenameDialog(std::function<void()> onClick);
+    void mouseUp(const juce::MouseEvent& e) override;
     std::function<void(uint32_t)> onInputMaskChanged;
     std::function<void(float)> onGainChanged;
     // Clique no ponto de cor (sem callback, o ponto nao e clicavel).
@@ -63,6 +67,7 @@ private:
 
     ColourDot colourDot_;
     juce::Label nameLabel_;
+    std::function<void()> onNameClicked_;
     juce::Label inputCaption_;
     juce::ComboBox inputSelector_;
     juce::Slider volumeSlider_;
