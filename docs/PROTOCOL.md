@@ -27,7 +27,8 @@ desktop). Este documento é a versão em prosa para consulta rápida.
 
 `buttonId`: REC_PLAY=0, PAUSE=1, UNDO=2, MODE=3, TRACK1..4=4..7.
 `gesture`: PRESS=0 (todos os botões, disparado no press-down para latência
-mínima), LONG_PRESS=1 (só emitido pelo UNDO, hold de 3s).
+mínima), LONG_PRESS=1 (só emitido pelo UNDO: hold de 3s, ou STOP+UNDO pisados
+juntos — os dois significam Clear All).
 
 ## Mensagens PC → Mega
 

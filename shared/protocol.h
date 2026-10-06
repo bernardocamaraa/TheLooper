@@ -47,7 +47,8 @@ enum ButtonId : uint8_t {
 
 // Gestos classificados pelo firmware. Todos os botoes emitem so kGesturePress
 // (disparado no press-down, latencia minima) exceto UNDO, que tambem pode
-// emitir kGestureLongPress (hold de 3s, ver kUndoLongPressMs).
+// emitir kGestureLongPress (hold de 3s, ver kClearAllHoldMs, ou STOP+UNDO
+// pisados juntos - os dois significam Clear All).
 enum Gesture : uint8_t {
     kGesturePress = 0,
     kGestureLongPress = 1

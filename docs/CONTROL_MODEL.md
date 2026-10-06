@@ -92,7 +92,8 @@ sem precisar trocar de modo).
   fecha essa captura primeiro) e volta a posição para o **início (0)**. Para
   retomar, use `REC_PLAY` (em `REC_MODE` continua o ciclo normal; em
   `PLAY_MODE` ele funciona como PLAY).
-- Sem função de hold — `PAUSE` só para, nada mais.
+- Sem função de hold — `PAUSE` só para (exceto combinado com o CLEAR, ver
+  abaixo).
 
 ## UNDO (fisicamente "CLEAR") — sempre age sobre a track selecionada
 
@@ -112,6 +113,12 @@ sem precisar trocar de modo).
   global (`REC_MODE`/`PLAY_MODE`) nem a track selecionada permanece a mesma
   (volta pra Track1). A partir de ~1,5s de hold, os 4 LEDs piscam vermelho
   como aviso (soltar antes dos 3s cancela).
+- **STOP + CLEAR juntos**: **Clear All imediato**, sem esperar o hold.
+  Funciona em qualquer ordem (pisar um e depois o outro, mantendo o primeiro
+  pisado). O STOP para o transporte no instante em que é pisado, como sempre;
+  o Clear All dispara assim que os dois estão pisados, e soltar o CLEAR
+  depois disso **não** remove camada nenhuma. É o mesmo evento do hold de 3s
+  (`UNDO` + `LONG_PRESS`), então o app não distingue os dois.
 
 ## LEDs
 

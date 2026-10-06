@@ -51,6 +51,14 @@ ButtonEvent Button::update(uint32_t nowMs) {
     return ButtonEvent::kEventNone;
 }
 
+bool Button::consumeHold() {
+    if (longPressMs_ == 0 || !stableState_ || longPressFired_) {
+        return false;
+    }
+    longPressFired_ = true;
+    return true;
+}
+
 bool Button::isArmed(uint32_t nowMs, uint16_t armThresholdMs) const {
     if (longPressMs_ == 0 || !stableState_ || longPressFired_) {
         return false;

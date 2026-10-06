@@ -46,7 +46,8 @@ constexpr uint16_t kDebounceMs = 20;
 
 // UNDO (fisicamente "CLEAR"): hold = Clear All (limpa o pedal inteiro,
 // incluindo o comprimento do loop). Acao mais destrutiva do pedal, por isso
-// o aviso piscando antes de disparar.
+// o aviso piscando antes de disparar. Atalho rapido: pisar STOP + CLEAR
+// juntos dispara o Clear All na hora, sem esperar o hold (ver main.cpp).
 constexpr uint16_t kClearAllHoldMs = 3000;
 constexpr uint16_t kClearAllArmWarningMs = 1500; // a partir daqui, LEDs piscam vermelho avisando o Clear All iminente
 

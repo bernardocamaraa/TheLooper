@@ -53,6 +53,15 @@ void loop() {
         }
     }
 
+    // Atalho de Clear All: STOP + CLEAR pisados juntos, em qualquer ordem.
+    // O STOP ja parou o transporte no press-down; o CLEAR ainda nao emitiu
+    // nada (so decide no release ou no hold), entao consumir o hold dele
+    // aqui evita que o soltar remova uma camada. O app recebe o mesmo
+    // LONG_PRESS do hold de 3s - nada muda do lado dele.
+    if (buttons[protocol::kButtonPause].isPressed() && buttons[protocol::kButtonUndo].consumeHold()) {
+        serialProtocol.sendButtonEvent(protocol::kButtonUndo, protocol::kGestureLongPress);
+    }
+
     bool clearAllArmed = buttons[protocol::kButtonUndo].isArmed(nowMs, config::kClearAllArmWarningMs);
     ledController.setResetWarning(clearAllArmed);
     ledController.update(nowMs);

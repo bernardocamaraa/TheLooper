@@ -5,6 +5,8 @@
 // musical. O UNDO precisa distinguir short-press de long-press (3s = reset
 // geral): nesse caso o evento so e emitido no release (curto) ou no instante
 // em que o hold cruza o threshold (longo, ainda pressionado) - nunca os dois.
+// O hold tambem pode ser "consumido" de fora (consumeHold), para o combo
+// STOP+CLEAR disparar o Clear All na hora.
 #pragma once
 
 #include <Arduino.h>
@@ -24,6 +26,12 @@ public:
     bool isArmed(uint32_t nowMs, uint16_t armThresholdMs) const;
 
     bool isPressed() const { return stableState_; }
+
+    // Se o botao esta pisado e ainda nao disparou o long-press, marca o hold
+    // como ja usado e retorna true: o release nao emite mais kEventPress, o
+    // long-press nao dispara e isArmed() volta a false. Retorna true no
+    // maximo uma vez por pisada.
+    bool consumeHold();
 
 private:
     uint8_t pin_ = 0;
