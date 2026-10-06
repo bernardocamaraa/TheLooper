@@ -4,6 +4,7 @@
 
 #include "RtThread.h"
 
+#include "BuildInfo.h"
 #include "PedalKeys.h"
 #include "UiText.h"
 
@@ -959,6 +960,9 @@ void MainComponent::timerCallback() {
         status += sep + ui::utf8("sem dispositivo de áudio");
     }
     status += sep + ui::utf8("latência ") + juce::String(looperEngine_.latencyMs(), 1) + " ms";
+    // Data do build: e como se descobre se o que esta aberto e o que acabou de
+    // ser compilado - ver BuildInfo.h.
+    status += sep + "build " + buildinfo::stamp();
     statusLabel_.setText(status, juce::dontSendNotification);
     statusLabel_.setColour(juce::Label::textColourId,
                             serialLink_.isConnected() ? theme::inkFaint : theme::amber);

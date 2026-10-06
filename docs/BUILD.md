@@ -110,6 +110,21 @@ então o plugin precisa ter sido compilado antes de gerar o instalador.
 
 Para não compilar o plugin: `-DPEDAL_BUILD_PLUGIN=OFF`.
 
+### Atualizar o plugin no FL (jeito fácil)
+
+Dê um duplo clique em `desktop/installer/atualizar-plugin.bat`. Ele:
+
+1. espera o FL ser fechado (com o FL aberto o `.vst3` fica travado e o build
+   não consegue sobrescrevê-lo — o FL continuaria abrindo o velho);
+2. compila só o plugin, achando o CMake do Visual Studio sozinho;
+3. troca a cópia em `C:\Program Files\Common Files\VST3` (pede permissão de
+   administrador só para isso);
+4. diz qual **data de build** tem de aparecer no rodapé do plugin.
+
+O app e o plugin mostram no rodapé `build dd/mm/aaaa hh:mm`, gerado a cada
+compilação (`cmake/BuildStamp.cmake`). Se a data no FL não é a do último build,
+o FL está abrindo uma cópia velha.
+
 ### O plugin não aparece no FL
 
 Confira nesta ordem:

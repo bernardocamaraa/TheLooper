@@ -22,7 +22,7 @@ if(NOT WIN32)
 endif()
 
 # JUCE: espera um checkout em desktop/JUCE (submodulo git recomendado:
-# `git submodule add https://github.com/juce-framework/JUCE.git desktop/JUCE`).
+# `git submodule update --init`).
 # O SDK do VST3 ja vem dentro do JUCE - nao precisa baixar nada para o plugin.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     message(FATAL_ERROR "JUCE nao encontrado em desktop/JUCE - ver docs/BUILD.md.")
@@ -56,10 +56,25 @@ set(kPedalCoreSources
     Source/VuMeter.cpp
     Source/TrackControlStrip.cpp
     Source/TrackMeterPanel.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/BuildInfo.cpp
+)
+
+# Carimbo de data/hora do build (ver Source/BuildInfo.h). O target roda a
+# cada build e regera o .cpp; os dois targets dependem dele para o arquivo
+# existir e estar atualizado antes de compilarem.
+set(kPedalBuildStampFile ${CMAKE_CURRENT_BINARY_DIR}/generated/BuildInfo.cpp)
+add_custom_target(pedal_build_stamp ALL
+    COMMAND ${CMAKE_COMMAND} -DOUT=${kPedalBuildStampFile}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildStamp.cmake
+    BYPRODUCTS ${kPedalBuildStampFile}
+    COMMENT "Carimbando a data do build"
+    VERBATIM
 )
 
 # Ajustes que valem para qualquer target deste projeto.
 function(pedal_configure_target target)
+    add_dependencies(${target} pedal_build_stamp)
+
     target_include_directories(${target} PRIVATE
         Source
         ${CMAKE_CURRENT_SOURCE_DIR}/../shared
