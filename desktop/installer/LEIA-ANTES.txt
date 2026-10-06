@@ -9,6 +9,10 @@ Obrigado por baixar o TheLooper! Algumas informações importantes:
   "Microsoft Visual C++ Redistributable" (x64). Baixe em:
   https://aka.ms/vs/17/release/vc_redist.x64.exe
 
+- O instalador tambem coloca o plugin "PEDAL Looper" (VST3) na pasta
+  padrao de VST3 do Windows. No FL Studio ele aparece como EFEITO, no
+  Mixer (nao no Channel Rack) - rode "Find more plugins" se nao aparecer.
+
 Depois de instalar os dois itens acima, o Pedal Looper deve abrir
 normalmente. 
 

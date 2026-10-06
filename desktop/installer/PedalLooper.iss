@@ -28,6 +28,9 @@ Name: "desktopicon"; Description: "Criar atalho na Area de Trabalho"; GroupDescr
 
 [Files]
 Source: "..\build\PedalLooper_artefacts\Release\Pedal Looper.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Plugin VST3 para o FL Studio. O .vst3 e uma PASTA (bundle), dai o recursesubdirs.
+; Vai para a pasta padrao de VST3 do Windows, que o FL varre sem configurar nada.
+Source: "..\build\PedalLooperPlugin_artefacts\Release\VST3\PEDAL Looper.vst3\*"; DestDir: "{commoncf64}\VST3\PEDAL Looper.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

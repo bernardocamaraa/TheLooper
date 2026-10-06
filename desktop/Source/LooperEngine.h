@@ -1,4 +1,4 @@
-// FSM completa do looper (ver software/docs/CONTROL_MODEL.md para a
+// FSM completa do looper (ver docs/CONTROL_MODEL.md para a
 // especificacao em prosa). Todos os metodos publicos sao RT-safe e devem ser
 // chamados a partir do callback de audio: handleButtonEvent() no inicio do
 // bloco (drenando a fila vinda do SerialLink) e processFrame() uma vez por

@@ -5,16 +5,16 @@
 Pré-requisitos: [PlatformIO](https://platformio.org/) (extensão do VS Code ou
 `pip install platformio`).
 
-1. Abra a pasta `software/firmware` no VS Code com a extensão PlatformIO, ou
+1. Abra a pasta `firmware` no VS Code com a extensão PlatformIO, ou
    rode pela CLI:
    ```
-   pio run -e megaatmega2560 -d software/firmware
+   pio run -e megaatmega2560 -d firmware
    ```
 2. Grave no Mega:
    ```
-   pio run -e megaatmega2560 -d software/firmware -t upload
+   pio run -e megaatmega2560 -d firmware -t upload
    ```
-3. **Antes de gravar**, confira `software/firmware/include/Config.h` e ajuste
+3. **Antes de gravar**, confira `firmware/include/Config.h` e ajuste
    os números dos pinos (`kPin*`) para bater com a fiação real do pedal.
 4. Para depurar, o Monitor Serial do PlatformIO mostra os bytes brutos do
    protocolo (não é texto legível — é o protocolo binário de
@@ -24,12 +24,13 @@ Pré-requisitos: [PlatformIO](https://platformio.org/) (extensão do VS Code ou
 
 Pré-requisitos:
 
-1. **JUCE** — clone como submódulo dentro de `software/desktop`:
+1. **JUCE** — já está registrado como submódulo em `desktop/JUCE`. Se o
+   repositório foi clonado sem `--recursive`, a pasta vem vazia; baixe com:
    ```
-   git submodule add https://github.com/juce-framework/JUCE.git software/desktop/JUCE
+   git submodule update --init
    ```
-   (ou baixe/extraia manualmente em `software/desktop/JUCE`, contanto que
-   `software/desktop/JUCE/CMakeLists.txt` exista).
+   (ou baixe/extraia manualmente em `desktop/JUCE`, contanto que
+   `desktop/JUCE/CMakeLists.txt` exista).
 
 2. **ASIO SDK** da Steinberg — necessário para o app enxergar o driver
    ASIO4ALL (ou qualquer outro driver ASIO da sua interface de áudio). A
@@ -54,8 +55,8 @@ Pré-requisitos:
 ### Configurar e compilar
 
 ```
-cmake -S software/desktop -B software/desktop/build -DASIO_SDK_PATH="C:/asiosdk"
-cmake --build software/desktop/build --config Release
+cmake -S desktop -B desktop/build -DASIO_SDK_PATH="C:/asiosdk"
+cmake --build desktop/build --config Release
 ```
 
 Se `ASIO_SDK_PATH` não for informado, o build funciona mas só com
@@ -91,11 +92,11 @@ standalone já exige.
 O target sai junto no build normal. Para compilar só ele:
 
 ```
-cmake --build software/desktop/build --config Release --target PedalLooperPlugin_VST3
+cmake --build desktop/build --config Release --target PedalLooperPlugin_VST3
 ```
 
 O resultado é `PEDAL Looper.vst3` em
-`software/desktop/build/PedalLooperPlugin_artefacts/Release/VST3/`.
+`desktop/build/PedalLooperPlugin_artefacts/Release/VST3/`.
 
 A cópia automática para `C:\Program Files\Common Files\VST3` está **desligada**
 (`COPY_PLUGIN_AFTER_BUILD FALSE`): ela exige um shell de administrador e fazia
@@ -103,7 +104,30 @@ o build inteiro falhar. Em vez disso, adicione a pasta acima aos caminhos de
 busca do FL (`Options > Manage plugins > Plugin search paths`) e rode o "Find
 more plugins". Assim cada rebuild já vale, sem copiar nada.
 
+O instalador (`desktop/installer/PedalLooper.iss`) copia o plugin para
+`C:\Program Files\Common Files\VST3`, que o FL já varre sem configurar nada —
+então o plugin precisa ter sido compilado antes de gerar o instalador.
+
 Para não compilar o plugin: `-DPEDAL_BUILD_PLUGIN=OFF`.
+
+### O plugin não aparece no FL
+
+Confira nesta ordem:
+
+1. **O `.vst3` existe** na pasta acima. Se não existe, o build do plugin não
+   rodou ou falhou — compile o target `PedalLooperPlugin_VST3` e leia o erro.
+2. **O FL procura nessa pasta.** Ela não é um caminho padrão: tem de estar em
+   `Options > Manage plugins > Plugin search paths`, ou o `.vst3` tem de ser
+   copiado para `C:\Program Files\Common Files\VST3`. Depois de qualquer um
+   dos dois, clique em **Find more plugins**.
+3. **Você está procurando no lugar certo.** O looper é um **efeito**, não um
+   instrumento: ele **não** aparece no "Add" do Channel Rack. Abra o Mixer,
+   clique num slot de efeito vazio da track e procure **PEDAL Looper** em
+   *Effects*.
+4. **A varredura não falhou.** No `Manage plugins`, um plugin que o FL achou
+   mas não conseguiu carregar aparece marcado com erro. A causa mais comum é
+   faltar o **Visual C++ Redistributable x64**
+   (https://aka.ms/vs/17/release/vc_redist.x64.exe), o mesmo que o app pede.
 
 ### Ligar no FL Studio
 

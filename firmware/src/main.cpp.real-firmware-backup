@@ -1,10 +1,10 @@
 // Firmware do controlador do pedal (Arduino Mega 2560).
 //
 // Este firmware NAO conhece a FSM do looper (REC/PLAY, estados de track,
-// etc.) - toda essa logica vive no app desktop (ver software/desktop). Aqui
+// etc.) - toda essa logica vive no app desktop (ver desktop). Aqui
 // so existe: debounce + classificacao de gestos dos 8 footswitches, envio
 // desses eventos por serial, e controle dos 4 LEDs bicolores conforme
-// comandos recebidos do PC. Ver software/docs/PROTOCOL.md e CONTROL_MODEL.md.
+// comandos recebidos do PC. Ver docs/PROTOCOL.md e CONTROL_MODEL.md.
 #include <Arduino.h>
 #include "protocol.h"
 #include "Config.h"

@@ -4,7 +4,7 @@
 //
 // Esta classe tambem e dona de toda a cadeia (LooperEngine ->
 // AudioEngine/ASIO, SerialLink, VirtualMicOutput), da Settings e da segunda
-// janela. Ver software/docs/CONTROL_MODEL.md para a FSM que a LooperEngine
+// janela. Ver docs/CONTROL_MODEL.md para a FSM que a LooperEngine
 // implementa.
 #pragma once
 

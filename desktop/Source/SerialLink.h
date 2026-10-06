@@ -3,7 +3,7 @@
 // alimenta a fila SPSC consumida pelo AudioEngine; drena a fila de
 // LedCommand produzida pelo AudioEngine e envia MSG_LED_SET, alem de reenviar
 // periodicamente um MSG_LED_SET_ALL completo (resync) e imediatamente apos
-// reconectar - ver software/docs/PROTOCOL.md.
+// reconectar - ver docs/PROTOCOL.md.
 //
 // Implementacao especifica de Windows (Win32 API para a porta COM e SetupAPI
 // para auto-detectar o Mega por VID:PID) - ver SerialLink.cpp.
